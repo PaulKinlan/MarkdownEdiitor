@@ -27,7 +27,7 @@ export class SiteSession extends ConversationObject<"site"> {
           fetchUrl: pageFetcher(env),
         }),
         createResearchExtension(),
-        createSkillsExtension("site", () => site()?.skills),
+        createSkillsExtension("site", () => (self as SiteSession).allSkills()),
       ];
     });
   }

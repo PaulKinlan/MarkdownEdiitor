@@ -1,4 +1,5 @@
 import type { ClientToServer, ModelInfo, PostContext, ServerToClient, SiteContext } from "../shared/protocol";
+import type { Skill } from "../shared/skills";
 import type { McpToolInfo, ToolSettings } from "../shared/tools";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
@@ -114,6 +115,8 @@ export interface AgentLink extends EventTarget {
   readonly view?: ViewMessage;
   readonly status: "connecting" | "open" | "closed";
   updatePost(post: PostContext): void;
+  /** Skills beyond the built-in ones. */
+  updateSkills(skills: Skill[]): void;
   prompt(text: string, model: { provider: string; modelId: string }, label?: string): void;
   abort(): void;
   reset(): void;
@@ -133,6 +136,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private closed = false;
   private context?: Extract<ClientToServer, { type: "post" | "site" }>;
   private contextTimer?: ReturnType<typeof setTimeout>;
+  private skills?: Skill[];
 
   constructor(
     private settings: AgentSettings,
@@ -159,6 +163,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
       this.retry = 0;
       this.status = "open";
       if (this.context) this.send(this.context);
+      if (this.skills) this.send({ type: "skills", skills: this.skills });
       this.changed();
     };
     ws.onmessage = (e) => {
@@ -182,6 +187,12 @@ export class AgentConnection extends EventTarget implements AgentLink {
   /** Debounced: typing in the editor sends the text at most every 750 ms. */
   updatePost(post: PostContext) {
     this.setContext({ type: "post", post });
+  }
+
+  /** Sent now if connected, and again on every reconnect. */
+  updateSkills(skills: Skill[]) {
+    this.skills = skills;
+    if (this.ws?.readyState === WebSocket.OPEN) this.send({ type: "skills", skills });
   }
 
   updateSite(site: SiteContext) {
