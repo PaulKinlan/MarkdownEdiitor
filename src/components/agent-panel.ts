@@ -4,7 +4,8 @@ import type { ChatItem, Edit, ModelInfo } from "../shared/protocol";
 import { editDecisions, type AgentLink } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, loadCustomActions, saveCustomActions, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
-import { controls } from "./shared";
+import { controls, lightDismiss } from "./shared";
+import { icon } from "./icons";
 
 type EditState = "pending" | "accepted" | "rejected" | "stale";
 
@@ -19,44 +20,47 @@ export class AgentPanel extends LitElement {
     controls,
     css`
       :host { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-2); }
-      .bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-      .bar select { flex: 1; min-width: 0; }
-      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-2); flex: none; }
+      .bar { display: flex; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+      .bar select { flex: 1; min-width: 0; font-size: 13px; }
       .dot.open { background: var(--ok); }
+      .dot.connecting { background: var(--warn); }
       .dot.closed { background: var(--danger); }
-      .actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-      .actions button { font-size: 12px; padding: 2px 8px; }
-      .log { flex: 1; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
-      .msg { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-      .user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 14%, transparent); padding: 6px 10px; border-radius: 10px; max-width: 90%; }
+      .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+      .actions button { min-height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
+      .log { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+      .msg { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+      .user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); padding: 7px 12px; border-radius: 14px 14px 4px 14px; max-width: 85%; }
       .user .label { font-weight: 600; }
       .assistant { padding: 0 2px; }
       .assistant.partial { color: var(--fg-2); }
       .error { color: var(--danger); font-size: 13px; }
-      .tool { font-size: 12px; color: var(--fg-2); font-family: var(--mono); }
-      .tool.error { color: var(--danger); }
-      .edit { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); padding: 6px 8px; display: grid; gap: 4px; }
-      .edit.accepted { border-color: var(--ok); opacity: 0.7; }
+      .tool { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* Failures wrap so the reason is never clipped. */
+      .tool.error { color: var(--danger); white-space: normal; overflow-wrap: anywhere; }
+      .edit { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); padding: 10px 12px; display: grid; gap: 8px; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+      .edit.accepted { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); opacity: 0.7; }
       .edit.rejected, .edit.stale { opacity: 0.55; }
-      .edit .text { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .edit del { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
-      .edit ins { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); text-decoration: none; }
+      .edit .text { font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .edit del { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border-radius: 3px; }
+      .edit ins { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); text-decoration: none; border-radius: 3px; }
       .edit .reason { font-size: 12px; color: var(--fg-2); }
       .edit .row { display: flex; gap: 6px; align-items: center; }
-      .edit .row button { font-size: 12px; padding: 1px 8px; }
-      .edit .state { font-size: 12px; color: var(--fg-2); margin-left: auto; }
-      .bulk { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--border); align-items: center; font-size: 12px; }
-      form.input { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
-      form.input textarea { flex: 1; resize: none; min-height: 2.6em; max-height: 10em; field-sizing: content; }
-      .empty { color: var(--fg-2); padding: 16px; line-height: 1.6; }
-      .usage { font-size: 11px; color: var(--fg-2); }
-      dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--fg); padding: 20px; width: min(560px, 92vw); }
-      dialog::backdrop { background: rgb(0 0 0 / 0.35); }
-      dialog form { display: grid; gap: 10px; }
-      dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--fg-2); }
+      .edit .state { font-size: 12px; color: var(--fg-2); margin-left: auto; text-transform: capitalize; }
+      .bulk { display: flex; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--border); align-items: center; font-size: 12px; color: var(--fg-2); }
+      .bulk .spacer { flex: 1; }
+      form.input { position: relative; margin: 10px; display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
+      form.input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+      form.input textarea { flex: 1; resize: none; border: 0; padding: 5px 0; background: transparent; min-height: 1.6em; max-height: 10em; field-sizing: content; line-height: 1.45; box-shadow: none; }
+      .empty { color: var(--fg-2); padding: 24px 12px; line-height: 1.6; text-align: center; display: grid; justify-items: center; gap: 8px; }
+      .empty .icon { width: 22px; height: 22px; color: var(--accent); }
+      .empty.error { color: var(--danger); }
+      .usage { font-size: 11px; color: var(--fg-2); padding: 0 12px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+      dialog { width: min(560px, 92vw); }
+      dialog form { display: grid; gap: 12px; }
       dialog textarea { min-height: 8em; resize: vertical; }
-      dialog .list { display: grid; gap: 4px; max-height: 30vh; overflow-y: auto; }
-      dialog .list .row { display: flex; gap: 6px; align-items: center; }
+      dialog .list { display: grid; gap: 2px; max-height: 30vh; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; }
+      dialog .list .row { display: flex; gap: 6px; align-items: center; padding: 2px 4px 2px 8px; border-radius: 4px; }
+      dialog .list .row:hover { background: var(--hover); }
       dialog .list .row span { flex: 1; }
       dialog .buttons { display: flex; gap: 8px; justify-content: flex-end; }
     `,
@@ -190,8 +194,8 @@ export class AgentPanel extends LitElement {
       ${edit.reason ? html`<div class="reason">${edit.reason}</div>` : nothing}
       <div class="row">
         ${s === "pending"
-          ? html`<button class="primary" @click=${() => this.decide(key, edit, true)}>Accept</button>
-              <button @click=${() => this.decide(key, edit, false)}>Reject</button>`
+          ? html`<button class="primary small" @click=${() => this.decide(key, edit, true)}>Accept</button>
+              <button class="small" @click=${() => this.decide(key, edit, false)}>Reject</button>`
           : html`<span class="state">${s === "stale" ? "No longer matches the post" : s}</span>`}
       </div>
     </div>`;
@@ -214,17 +218,17 @@ export class AgentPanel extends LitElement {
 
   private renderDialog() {
     const custom = this.actions.filter((a) => !BUILTIN_ACTIONS.some((b) => b.id === a.id));
-    return html`<dialog id="actions-dialog">
+    return html`<dialog id="actions-dialog" closedby="any" aria-labelledby="actions-title" @click=${lightDismiss} @close=${() => (this.editing = undefined)}>
       <form @submit=${this.saveAction}>
-        <h3>Your edits</h3>
+        <h3 id="actions-title">Your edits</h3>
         <p class="muted">An edit is a saved instruction the assistant runs on the open post. It can read the post, search your past posts and the web, and propose changes for you to accept.</p>
         ${custom.length
           ? html`<div class="list">
               ${custom.map(
                 (a) => html`<div class="row">
                   <span>${a.name}</span>
-                  <button type="button" @click=${() => (this.editing = a)}>Edit</button>
-                  <button type="button" @click=${() => this.deleteAction(a)}>Delete</button>
+                  <button type="button" class="ghost small" @click=${() => (this.editing = a)}>Edit</button>
+                  <button type="button" class="ghost small danger" @click=${() => this.deleteAction(a)}>Delete</button>
                 </div>`,
               )}
             </div>`
@@ -256,17 +260,17 @@ export class AgentPanel extends LitElement {
           )}
         </select>
         ${busy
-          ? html`<button @click=${() => this.connection?.abort()}>Stop</button>`
+          ? html`<button @click=${() => this.connection?.abort()}>${icon("stop")} Stop</button>`
           : html`<button class="ghost" title="Start a new conversation" ?disabled=${!view?.items.length} @click=${() => this.connection?.reset()}>New chat</button>`}
       </div>
       <div class="actions">
         ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${a.prompt} @click=${() => this.send(a.prompt, a.name)}>${a.name}</button>`)}
-        <button class="ghost" @click=${() => this.dialog?.showModal()}>+ Your edits</button>
+        <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
       <div class="log" aria-live="polite">
         ${this.configError ? html`<div class="empty error">${this.configError}</div>` : nothing}
         ${!view?.items.length && !this.configError
-          ? html`<div class="empty">Ask about this post, or run an edit above. Changes come back as suggestions you accept or reject.</div>`
+          ? html`<div class="empty">${icon("sparkles")}<span>Ask about this post, or run an edit above. Changes come back as suggestions you accept or reject.</span></div>`
           : nothing}
         ${view?.items.map((item) => this.renderItem(item))}
         ${view?.partial ? html`<div class="msg assistant partial">${view.partial}</div>` : nothing}
@@ -275,15 +279,16 @@ export class AgentPanel extends LitElement {
       ${pending.length > 1
         ? html`<div class="bulk">
             ${pending.length} suggestions
-            <button @click=${() => pending.forEach(({ key, edit }) => this.decide(key, edit, true))}>Accept all</button>
-            <button @click=${() => pending.forEach(({ key, edit }) => this.decide(key, edit, false))}>Reject all</button>
+            <span class="spacer"></span>
+            <button class="small" @click=${() => pending.forEach(({ key, edit }) => this.decide(key, edit, true))}>Accept all</button>
+            <button class="small" @click=${() => pending.forEach(({ key, edit }) => this.decide(key, edit, false))}>Reject all</button>
           </div>`
         : nothing}
       <form class="input" @submit=${this.submit}>
         <textarea placeholder=${busy ? "Queued until the current answer finishes…" : "Ask about this post…"} aria-label="Message" @keydown=${this.onInputKey}></textarea>
-        <button class="primary" type="submit" ?disabled=${!this.connection}>Send</button>
+        <button class="primary icon-only" type="submit" aria-label="Send" title="Send (Enter)" ?disabled=${!this.connection}>${icon("send")}</button>
       </form>
-      ${view?.usage ? html`<div class="usage bulk">${view.usage.tokens.toLocaleString()} tokens · $${view.usage.cost.toFixed(4)}</div>` : nothing}
+      ${view?.usage ? html`<div class="usage">${view.usage.tokens.toLocaleString()} tokens · $${view.usage.cost.toFixed(4)}</div>` : nothing}
       ${this.renderDialog()}
     `;
   }

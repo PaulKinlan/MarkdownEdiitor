@@ -1,36 +1,110 @@
+/*
+ * Design tokens. Each colour has a light and a dark value; the active one
+ * follows `color-scheme`, which follows the OS unless the user picked a theme
+ * in settings (that updates <meta name="color-scheme">, mapped below).
+ */
 :root {
-  --bg: #ffffff;
-  --bg-2: #f6f7f9;
-  --bg-3: #eceef2;
-  --fg: #1d2129;
-  --fg-2: #5b6270;
-  --border: #dde1e7;
-  --accent: #2f6feb;
-  --accent-fg: #ffffff;
-  --warn: #b25e00;
-  --danger: #c4302b;
-  --ok: #1f8a4c;
+  --bg-light: #fcfcfb;     --bg-dark: #17181b;
+  --bg-2-light: #f5f5f3;   --bg-2-dark: #1d1e22;
+  --bg-3-light: #ebebe8;   --bg-3-dark: #2a2b30;
+  --fg-light: #1f2023;     --fg-dark: #e8e8e6;
+  --fg-2-light: #62646b;   --fg-2-dark: #9c9ea6;
+  --border-light: #e2e2de; --border-dark: #303137;
+  --accent-light: #3156d3; --accent-dark: #7b9cff;
+  /* Dark text on the lighter dark-mode accent keeps primary buttons above 4.5:1. */
+  --accent-fg-light: #ffffff; --accent-fg-dark: #0b1220;
+  --warn-light: #9a5800;   --warn-dark: #f0a33c;
+  --danger-light: #c4302b; --danger-dark: #f06a64;
+  --ok-light: #1c7c45;     --ok-dark: #4cc382;
+  --shadow-light: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.08);
+  --shadow-dark: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.45);
+
+  /* Fallback for browsers without light-dark(). */
+  --bg: var(--bg-light);
+  --bg-2: var(--bg-2-light);
+  --bg-3: var(--bg-3-light);
+  --fg: var(--fg-light);
+  --fg-2: var(--fg-2-light);
+  --border: var(--border-light);
+  --accent: var(--accent-light);
+  --accent-fg: var(--accent-fg-light);
+  --warn: var(--warn-light);
+  --danger: var(--danger-light);
+  --ok: var(--ok-light);
+  --shadow: var(--shadow-light);
+  @media (prefers-color-scheme: dark) {
+    --bg: var(--bg-dark);
+    --bg-2: var(--bg-2-dark);
+    --bg-3: var(--bg-3-dark);
+    --fg: var(--fg-dark);
+    --fg-2: var(--fg-2-dark);
+    --border: var(--border-dark);
+    --accent: var(--accent-dark);
+    --accent-fg: var(--accent-fg-dark);
+    --warn: var(--warn-dark);
+    --danger: var(--danger-dark);
+    --ok: var(--ok-dark);
+    --shadow: var(--shadow-dark);
+  }
+  @supports (color: light-dark(white, black)) {
+    --bg: light-dark(var(--bg-light), var(--bg-dark));
+    --bg-2: light-dark(var(--bg-2-light), var(--bg-2-dark));
+    --bg-3: light-dark(var(--bg-3-light), var(--bg-3-dark));
+    --fg: light-dark(var(--fg-light), var(--fg-dark));
+    --fg-2: light-dark(var(--fg-2-light), var(--fg-2-dark));
+    --border: light-dark(var(--border-light), var(--border-dark));
+    --accent: light-dark(var(--accent-light), var(--accent-dark));
+    --accent-fg: light-dark(var(--accent-fg-light), var(--accent-fg-dark));
+    --warn: light-dark(var(--warn-light), var(--warn-dark));
+    --danger: light-dark(var(--danger-light), var(--danger-dark));
+    --ok: light-dark(var(--ok-light), var(--ok-dark));
+  }
+  --hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --selected: color-mix(in srgb, var(--accent) 12%, transparent);
+  --scrollbar-thumb: color-mix(in srgb, var(--fg) 22%, transparent);
+
   --radius: 6px;
+  --radius-lg: 10px;
+  --control-h: 28px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-editor: var(--font);
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
   color-scheme: light dark;
+  accent-color: var(--accent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+
+  &:has(> head > meta[name="color-scheme"][content="light"]) { color-scheme: light; }
+  &:has(> head > meta[name="color-scheme"][content="dark"]) { color-scheme: dark; }
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181d;
-    --bg-2: #1d2027;
-    --bg-3: #262a33;
-    --fg: #e6e8ec;
-    --fg-2: #9aa2b1;
-    --border: #323744;
-    --accent: #5b8ff9;
-    /* Dark text on the lighter dark-mode accent keeps primary buttons above 4.5:1. */
-    --accent-fg: #0b1220;
-    --warn: #f0a33c;
-    --danger: #f06a64;
-    --ok: #4cc382;
+/* The media-query fallback can't see a theme override, so pin it for browsers without light-dark(). */
+@supports not (color: light-dark(white, black)) {
+  :root:has(> head > meta[name="color-scheme"][content="light"]) {
+    --bg: var(--bg-light); --bg-2: var(--bg-2-light); --bg-3: var(--bg-3-light); --fg: var(--fg-light); --fg-2: var(--fg-2-light);
+    --border: var(--border-light); --accent: var(--accent-light); --accent-fg: var(--accent-fg-light);
+    --warn: var(--warn-light); --danger: var(--danger-light); --ok: var(--ok-light); --shadow: var(--shadow-light);
+  }
+  :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+    --bg: var(--bg-dark); --bg-2: var(--bg-2-dark); --bg-3: var(--bg-3-dark); --fg: var(--fg-dark); --fg-2: var(--fg-2-dark);
+    --border: var(--border-dark); --accent: var(--accent-dark); --accent-fg: var(--accent-fg-dark);
+    --warn: var(--warn-dark); --danger: var(--danger-dark); --ok: var(--ok-dark); --shadow: var(--shadow-dark);
   }
 }
+/* Box shadows can't go through light-dark(), so pick by scheme. */
+@media (prefers-color-scheme: dark) {
+  :root:not(:has(> head > meta[name="color-scheme"][content="light"])) { --shadow: var(--shadow-dark); }
+}
+:root:has(> head > meta[name="color-scheme"][content="dark"]) { --shadow: var(--shadow-dark); }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }

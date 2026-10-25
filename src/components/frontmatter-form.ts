@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { FrontMatterData, FrontMatterFormat } from "../lib/frontmatter";
 import { controls } from "./shared";
+import { icon } from "./icons";
 
 const LONG_TEXT = new Set(["summary", "description"]);
 const DATE_KEYS = new Set(["date", "lastmod", "publishdate", "expirydate"]);
@@ -20,21 +21,23 @@ export class FrontMatterForm extends LitElement {
     controls,
     css`
       :host { display: block; border-bottom: 1px solid var(--border); background: var(--bg-2); }
-      header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; }
-      header h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin: 0; color: var(--fg-2); flex: 1; }
-      .grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; padding: 4px 12px 12px; align-items: center; }
-      label { color: var(--fg-2); font-size: 13px; }
+      header { display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 12px; min-height: 36px; }
+      header h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--fg-2); flex: 1; }
+      header h2 .muted { font-weight: 500; text-transform: none; letter-spacing: 0; }
+      .grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; padding: 2px 16px 14px 12px; align-items: center; max-height: 45vh; overflow-y: auto; }
+      label { color: var(--fg-2); font-size: 12px; font-weight: 500; text-align: right; }
       .row { display: flex; gap: 6px; align-items: center; }
       .row input[type="text"] { flex: 1; }
-      textarea { width: 100%; resize: vertical; min-height: 3.4em; }
+      textarea { width: 100%; resize: vertical; min-height: 3.4em; line-height: 1.45; }
       textarea.raw { font-family: var(--mono); font-size: 13px; min-height: 10em; margin: 0 12px 12px; width: calc(100% - 24px); }
       .error { color: var(--danger); padding: 0 12px 8px; font-size: 13px; }
       .readonly { font-family: var(--mono); font-size: 12px; color: var(--fg-2); }
-      .grid input[type="checkbox"] { justify-self: start; }
-      .char-count { font-size: 12px; color: var(--fg-2); min-width: 4ch; text-align: right; }
+      .grid input[type="checkbox"] { justify-self: start; width: 16px; height: 16px; margin: 0; }
+      .char-count { font-size: 11px; color: var(--fg-2); min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+      .chevron { transition: rotate 150ms var(--ease); }
+      :host([collapsed]) .chevron { rotate: -90deg; }
       .long { display: grid; gap: 4px; }
       .long .row { justify-content: flex-end; font-size: 12px; color: var(--fg-2); }
-      .long .row button { font-size: 12px; padding: 1px 8px; }
       .long .row .error { padding: 0; }
     `,
   ];
@@ -106,7 +109,7 @@ export class FrontMatterForm extends LitElement {
     } else if (DATE_KEYS.has(lower) && (typeof value === "string" || value instanceof Date)) {
       control = html`<div class="row">
         <input id=${id} type="text" .value=${String(value instanceof Date ? value.toISOString() : value)} @change=${(e: Event) => this.set(key, (e.target as HTMLInputElement).value)} />
-        <button title="Set to now" @click=${() => this.set(key, new Date().toISOString())}>Now</button>
+        <button class="small" title="Set to now" @click=${() => this.set(key, new Date().toISOString())}>Now</button>
       </div>`;
     } else if (typeof value === "string" && (LONG_TEXT.has(lower) || value.length > 90 || value.includes("\n"))) {
       const textarea = html`<textarea id=${id} .value=${value} @change=${(e: Event) => this.set(key, (e.target as HTMLTextAreaElement).value)}></textarea>`;
@@ -116,7 +119,7 @@ export class FrontMatterForm extends LitElement {
               ${textarea}
               <div class="row">
                 ${this.drafting === key ? "Drafting on this device…" : this.draftError && html`<span class="error">${this.draftError}</span>`}
-                <button ?disabled=${!!this.drafting} title="Write a draft from the post with Chrome's on-device summarizer" @click=${() => this.draft(key)}>Draft ${key}</button>
+                <button class="small" ?disabled=${!!this.drafting} title="Write a draft from the post with Chrome's on-device summarizer" @click=${() => this.draft(key)}>Draft ${key}</button>
               </div>
             </div>`
           : textarea;
@@ -150,10 +153,21 @@ export class FrontMatterForm extends LitElement {
     const ordered = [...PRIORITY.filter((k) => keys.includes(k)), ...keys.filter((k) => !PRIORITY.includes(k))];
     return html`
       <header>
-        <h2>Front matter <span class="muted">(${this.format})</span></h2>
-        ${this.collapsed ? nothing : html`<button class="ghost" @click=${this.toggleRaw}>${this.mode === "form" ? "Edit raw" : "Form"}</button>`}
-        <button class="ghost" aria-expanded=${!this.collapsed} @click=${() => (this.collapsed = !this.collapsed)}>
-          ${this.collapsed ? "Show" : "Hide"}
+        <h2>Front matter <span class="muted">· ${this.format.toUpperCase()}</span></h2>
+        ${this.collapsed
+          ? nothing
+          : html`<div class="seg" role="group" aria-label="Front matter view">
+              <button aria-pressed=${this.mode === "form"} @click=${() => this.mode !== "form" && this.toggleRaw()}>Form</button>
+              <button aria-pressed=${this.mode === "raw"} @click=${() => this.mode !== "raw" && this.toggleRaw()}>Raw</button>
+            </div>`}
+        <button
+          class="ghost icon-only"
+          aria-label=${this.collapsed ? "Show front matter" : "Hide front matter"}
+          title=${this.collapsed ? "Show" : "Hide"}
+          aria-expanded=${!this.collapsed}
+          @click=${() => (this.collapsed = !this.collapsed)}
+        >
+          <span class="chevron">${icon("chevron")}</span>
         </button>
       </header>
       ${this.collapsed
