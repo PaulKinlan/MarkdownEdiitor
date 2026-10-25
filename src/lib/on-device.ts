@@ -3,7 +3,9 @@
 // device, cost nothing, and work without the agent server.
 
 import type { ChatItem, Edit, ModelInfo, PostContext } from "../shared/protocol";
+import { BUILTIN_SKILLS } from "../shared/builtin-skills";
 import { checkEdits } from "../shared/edits";
+import { inlineSkill, mergeSkills } from "../shared/skills";
 import type { AgentLink, ViewMessage } from "./agent-client";
 
 export const ON_DEVICE_PROVIDER = "chrome";
@@ -163,7 +165,7 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
       });
       this.partial = "Thinking on this device…";
       this.publish();
-      const input = await this.buildInput(session, post.text, text);
+      const input = await this.buildInput(session, post.text, inlineSkill(text, mergeSkills(BUILTIN_SKILLS, post.skills)));
       const raw = await session.prompt(input, { responseConstraint: RESPONSE_SCHEMA, signal: controller.signal });
       const { reply, edits } = parseResponse(raw);
       const { valid, problems } = checkEdits(post.text, edits);

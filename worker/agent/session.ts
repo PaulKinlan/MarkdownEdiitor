@@ -7,6 +7,8 @@ import type { ClientToServer, ModelRef, PostContext, ServerToClient } from "../.
 import type { Env } from "../env";
 import { createConfiguredModels } from "./models";
 import { projectView } from "./view";
+import { createResearchExtension } from "./research";
+import { createSkillsExtension } from "./skills";
 import { fetchReadable, webSearcher } from "./web";
 import { createWritingExtension } from "./writing";
 
@@ -51,6 +53,8 @@ export class AgentSession extends DurableObject<Env> {
           fetchUrl: fetchReadable,
         }),
       );
+      registry.install(createResearchExtension());
+      registry.install(createSkillsExtension("post", () => this.post?.skills));
       const storage = await SqliteStorage.open(this.database, { prefix: "pi_" });
       this.harness = await Harness.open(
         storage,
