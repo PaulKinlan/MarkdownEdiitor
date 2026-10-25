@@ -2,6 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { Edit, PostContext } from "../../src/shared/protocol";
 import { checkEdits } from "../../src/shared/edits";
+import { analyzePost } from "./post-stats";
 
 export { checkEdits };
 
@@ -104,7 +105,20 @@ export function createWritingExtension(host: WritingHost) {
     },
   });
 
-  const tools = [readPost, proposeEdits, searchPosts, readPastPost];
+  const analyze = defineTool({
+    name: "analyze_post",
+    description:
+      "Measure the post being edited: word count and reading time, heading outline, paragraph and sentence lengths, links (including vague link text), images without alt text, and front matter field lengths. Line numbers match read_post.",
+    parameters: Type.Object({}),
+    replay: "safe",
+    execute: async () => {
+      const post = host.post();
+      if (!post) return { output: [{ type: "text", text: "No post is open." }], isError: true };
+      return { output: [{ type: "text", text: analyzePost(post.text) }] };
+    },
+  });
+
+  const tools = [readPost, proposeEdits, searchPosts, readPastPost, analyze];
 
   if (host.webSearch) {
     const webSearch = host.webSearch;
@@ -144,7 +158,8 @@ export function createWritingExtension(host: WritingHost) {
         const post = host.post();
         if (!post) return undefined;
         const rules = post.siteInstructions.trim();
-        return `Site: ${post.siteName}${rules ? `\n\nThe author's writing rules for this site:\n\n${rules}` : ""}`;
+        const shortcodes = post.shortcodes?.length ? `\n\nHugo shortcodes this site defines: ${post.shortcodes.join(", ")}` : "";
+        return `Site: ${post.siteName}${shortcodes}${rules ? `\n\nThe author's writing rules for this site:\n\n${rules}` : ""}`;
       }),
       section("post", () => {
         const post = host.post();

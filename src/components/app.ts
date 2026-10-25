@@ -21,6 +21,9 @@ import { controls, lightDismiss } from "./shared";
 import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import type { MdEditor } from "./md-editor";
+import { BUILTIN_SKILLS } from "../shared/builtin-skills";
+import { mergeSkills, type Skill } from "../shared/skills";
+import { loadSiteSkills } from "../lib/site-skills";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
 import "./frontmatter-form";
@@ -196,6 +199,8 @@ export class MdApp extends LitElement {
   /** A launch to act on once the site it needs has loaded. */
   private pendingLaunch?: { siteId?: string; path?: string; share?: Launch["share"]; action?: string };
   private siteInstructions = "";
+  /** Skills from the site folder (.agents/skills, .claude/skills), sent to the assistant with the post. */
+  @state() private siteSkills: Skill[] = [];
   private stopWatching?: () => void;
   private unregisterTools?: () => void;
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
@@ -403,9 +408,10 @@ export class MdApp extends LitElement {
       this.config = config;
       this.posts = posts;
       this.shortcodes = shortcodes;
-      const rules = await Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f)));
+      const [rules, skills] = await Promise.all([Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f))), loadSiteSkills(site.handle)]);
       if (generation !== this.siteGeneration) return;
       this.siteInstructions = rules.filter(Boolean).join("\n\n");
+      this.siteSkills = skills;
       void this.watch(site);
       void this.connectAgentServer();
     } catch (e) {
@@ -756,6 +762,8 @@ export class MdApp extends LitElement {
       path: this.open.summary.path,
       url: this.open.summary.url,
       text: this.text,
+      shortcodes: this.shortcodes,
+      skills: this.siteSkills,
     };
   }
 
@@ -1092,6 +1100,7 @@ export class MdApp extends LitElement {
             .models=${this.models}
             .model=${this.agentSettings.model ?? ""}
             .configError=${this.agentError}
+            .skills=${mergeSkills(BUILTIN_SKILLS, this.siteSkills)}
             @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
             @apply-edit=${this.onApplyEdit}
           ></agent-panel>`}

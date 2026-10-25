@@ -1,5 +1,7 @@
 // Messages between the editor (browser) and an agent session (Durable Object).
 
+import type { Skill } from "./skills";
+
 export interface ModelRef {
   provider: string;
   modelId: string;
@@ -21,6 +23,10 @@ export interface PostContext {
   url: string;
   /** The whole file, front matter included, as it is in the editor (saved or not). */
   text: string;
+  /** Names of the site's Hugo shortcodes, so agents can use them. */
+  shortcodes?: string[];
+  /** Skills beyond the built-in ones: from the site folder, the author, or extensions. */
+  skills?: Skill[];
 }
 
 /** A find/replace suggestion. `find` must occur exactly once in the post text. */
