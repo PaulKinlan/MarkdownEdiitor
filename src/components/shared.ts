@@ -101,6 +101,11 @@ export const controls = css`
     button:active:not(:disabled) { transform: none; }
   }
 
+  /* iOS zooms the page into any field under 16px; phones get 16px fields. */
+  @media (max-width: 900px) {
+    input:not([type="checkbox"], [type="radio"]), select, textarea { font-size: 16px; }
+  }
+
   /* Scrollbars inside shadow roots don't inherit the page's styling. */
   * { scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin; }
 `;
