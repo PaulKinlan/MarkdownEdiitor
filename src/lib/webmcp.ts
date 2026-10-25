@@ -51,7 +51,7 @@ export function editorTools(host: EditorToolHost): ModelContextTool[] {
         properties: { query: { type: "string" }, limit: { type: "number", description: "At most this many (default 20, max 100)." } },
       },
       annotations: { readOnlyHint: true },
-      execute: async ({ query, limit }) => json(host.listPosts(typeof query === "string" ? query : "", Math.min(100, Number(limit) || 20))),
+      execute: async ({ query, limit }) => json(host.listPosts(typeof query === "string" ? query : "", Math.max(1, Math.min(100, Math.floor(Number(limit)) || 20)))),
     },
     {
       name: "open_post",

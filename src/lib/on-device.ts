@@ -96,6 +96,7 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
   private conversation: Conversation;
   private busy = false;
   private partial?: string;
+  private closed = false;
 
   constructor(readonly id: string) {
     super();
@@ -128,13 +129,18 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
   }
 
   close() {
-    // The conversation outlives the connection; only a running prompt stops.
+    // The conversation outlives the connection; a running prompt and any queued ones stop.
+    this.closed = true;
     this.abort();
   }
 
   private async run(text: string) {
     const post = this.post;
     const c = this.conversation;
+    if (this.closed) {
+      c.items.push({ kind: "assistant", id: c.nextId++, text: "", error: "Stopped." });
+      return this.publish();
+    }
     if (!post || typeof LanguageModel === "undefined") {
       c.items.push({ kind: "assistant", id: c.nextId++, text: "", error: "The on-device model isn't available in this browser." });
       return this.publish();

@@ -100,6 +100,19 @@ describe("on-device assistant", () => {
     expect(again.view!.items).toEqual([]);
   });
 
+  it("doesn't run queued prompts after the connection closes", async () => {
+    const prompts = fakeLanguageModel('{"reply":"hi","edits":[]}');
+    const c = new OnDeviceConnection("s1:test-3");
+    c.updatePost(post);
+    c.prompt("one", { provider: "chrome", modelId: "on-device" });
+    c.prompt("two", { provider: "chrome", modelId: "on-device" });
+    c.close();
+    await settle();
+    await settle();
+    expect(prompts).toHaveLength(0);
+    expect(c.view!.items.filter((i) => i.kind === "assistant").map((i) => (i as { error?: string }).error)).toEqual(["Stopped.", "Stopped."]);
+  });
+
   it("reports a missing model instead of hanging", async () => {
     const c = new OnDeviceConnection("s1:test-2");
     c.updatePost(post);
@@ -119,7 +132,18 @@ describe("folder watching", () => {
     ]);
     expect([...changes.paths].sort()).toEqual(["content/b.md", "content/old.md", "content/posts/a.md"]);
     expect(changes.rescan).toBe(false);
+    expect([...changes.dirs]).toEqual([]);
     expect(collectChanges([{ type: "unknown", relativePathComponents: [], relativePathMovedFrom: null }]).rescan).toBe(true);
+  });
+
+  it("marks folders, from the handle or the name", () => {
+    const dir = { kind: "directory" } as FileSystemHandle;
+    const changes = collectChanges([
+      { type: "moved", relativePathComponents: ["content", "posts", "new-bundle"], relativePathMovedFrom: ["content", "posts", "bundle"], changedHandle: dir },
+      { type: "disappeared", relativePathComponents: ["content", "drafts"], relativePathMovedFrom: null, changedHandle: null },
+      { type: "disappeared", relativePathComponents: ["content", "x.md"], relativePathMovedFrom: null, changedHandle: null },
+    ]);
+    expect([...changes.dirs].sort()).toEqual(["content/drafts", "content/posts/bundle", "content/posts/new-bundle"]);
   });
 });
 
@@ -178,6 +202,10 @@ describe("WebMCP tools", () => {
     const tools = Object.fromEntries(editorTools(host).map((t) => [t.name, t]));
     expect(JSON.parse(String(await tools.get_current_post.execute({})))).toMatchObject({ path: "content/a.md" });
     expect(JSON.parse(String(await tools.list_posts.execute({ query: "x", limit: 5 })))[0].title).toBe("A x");
+    const limits: number[] = [];
+    const capture = Object.fromEntries(editorTools({ ...host, listPosts: (_q, limit) => (limits.push(limit), []) }).map((t) => [t.name, t]));
+    for (const limit of [-1, 0, 500, 2.7, "x"]) await capture.list_posts.execute({ limit });
+    expect(limits).toEqual([1, 20, 100, 2, 20]);
     expect(JSON.parse(String(await tools.apply_edits.execute({ edits: [{ find: "a", replace: "b" }] })))).toEqual({ applied: 1, problems: [] });
     expect(await tools.open_post.execute({ path: "content/a.md" })).toBe("Opened content/a.md.");
     expect(await tools.run_edit.execute({ name: "Proofread" })).toBe("Started Proofread");

@@ -224,7 +224,8 @@ export class MdApp extends LitElement {
     // Compare contents, not times: a checkout or sync tool can keep or rewind modification times.
     const text = await file.text();
     if (text === open.savedText || text === this.text || this.open !== open || this.writing) return;
-    if (this.dirty) {
+    // A front matter field being typed in hasn't reached `text` yet, so it counts as unsaved.
+    if (this.dirty || focusedFrontMatterField()) {
       this.changedOnDisk = true;
     } else {
       await this.openPost(this.open.summary, true);
@@ -237,24 +238,29 @@ export class MdApp extends LitElement {
   private async watch(site: SiteRecord) {
     this.stopWatching?.();
     this.stopWatching = undefined;
-    const stop = await watchFolder(site.handle, (changes) => void this.onFolderChange(site, changes));
-    if (site === this.site) this.stopWatching = stop;
+    // Settings edits replace the site record, so match it by id rather than by object.
+    const stop = await watchFolder(site.handle, (changes) => void this.onFolderChange(site.id, changes));
+    if (site.id === this.site?.id) this.stopWatching = stop;
     else stop?.();
   }
 
-  private async onFolderChange(site: SiteRecord, changes: FolderChanges) {
-    const { config } = this;
-    if (site !== this.site || !config || this.needsPermission) return;
-    if (changes.rescan) {
+  private async onFolderChange(siteId: string, changes: FolderChanges) {
+    const { config, site } = this;
+    if (!site || site.id !== siteId || !config || this.needsPermission) return;
+    const inContent = (p: string) => p.startsWith(`${config.contentDir}/`);
+    // A moved or deleted folder can hold many posts: re-list everything rather than guess what was inside.
+    const rescan = changes.rescan || [...changes.dirs].some((d) => inContent(d) || config.contentDir.startsWith(`${d}/`) || d === config.contentDir);
+    if (rescan) {
       const posts = await listPosts(site.handle, config);
-      if (site !== this.site) return;
+      if (site.id !== this.site?.id) return;
       this.posts = posts;
     } else {
-      const changed = [...changes.paths].filter((p) => p.startsWith(`${config.contentDir}/`) && isContentFile(p));
+      const changed = [...changes.paths].filter((p) => inContent(p) && isContentFile(p));
       if (changed.length) await this.refreshPosts(site, config, changed);
     }
-    if (changes.rescan || (this.open && changes.paths.has(this.open.summary.path))) await this.checkOpenPost();
-    if (this.agentServerUp && (changes.rescan || [...changes.paths].some((p) => p.startsWith(config.contentDir)))) void this.syncIndex();
+    const openPath = this.open?.summary.path;
+    if (rescan || (openPath && [...changes.paths].some((p) => openPath === p || openPath.startsWith(`${p}/`)))) await this.checkOpenPost();
+    if (this.agentServerUp && (rescan || [...changes.paths].some((p) => p.startsWith(config.contentDir)))) void this.syncIndex();
   }
 
   /** Re-reads the given content files, adding, updating or dropping them in the post list. */
@@ -269,7 +275,7 @@ export class MdApp extends LitElement {
         }
       }),
     );
-    if (site !== this.site) return;
+    if (site.id !== this.site?.id) return;
     const byPath = new Map(this.posts.map((p) => [p.path, p]));
     for (const { path, summary } of updates) {
       if (summary) byPath.set(path, summary);
@@ -766,6 +772,7 @@ export class MdApp extends LitElement {
     },
     save: async () => {
       if (!this.open) return "No post is open.";
+      commitFocusedField();
       if (!this.dirty) return "Nothing to save.";
       await this.save();
       return this.dirty ? `Not saved${this.error ? `: ${this.error}` : "."}` : `Saved ${this.open.summary.path}.`;
@@ -1085,8 +1092,13 @@ declare global {
  * an edit that is still being typed.
  */
 function commitFocusedField() {
+  focusedFrontMatterField()?.blur();
+}
+
+/** The front matter form's focused text field, if one is focused. */
+function focusedFrontMatterField(): HTMLInputElement | HTMLTextAreaElement | undefined {
   let el = document.activeElement;
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
   const host = el?.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot).host : undefined;
-  if (host?.localName === "frontmatter-form" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) el.blur();
+  return host?.localName === "frontmatter-form" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) ? el : undefined;
 }
