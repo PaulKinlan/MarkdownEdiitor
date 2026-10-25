@@ -1,4 +1,4 @@
-import type { ClientToServer, ModelInfo, PostContext, ServerToClient } from "../shared/protocol";
+import type { ClientToServer, ModelInfo, PostContext, ServerToClient, SiteContext } from "../shared/protocol";
 import type { AgentExtensionSpec, ExtensionCall } from "../shared/extensions";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
@@ -55,6 +55,11 @@ export function sessionId(siteId: string, path: string): string {
   return `${siteId}:${encoded}`;
 }
 
+/** The site-wide conversation. Its decisions share the per-session map below. */
+export function siteSessionId(siteId: string): string {
+  return `site:${siteId}`;
+}
+
 const decisions = new Map<string, Map<string, string>>();
 
 /**
@@ -90,8 +95,9 @@ export interface AgentLink extends EventTarget {
 }
 
 /**
- * A WebSocket to one AgentSession. Reconnects with backoff, and re-sends the
- * post context on every (re)connect, since the session may have been evicted.
+ * A WebSocket to one AgentSession (a post) or SiteSession (a whole site).
+ * Reconnects with backoff, and re-sends the context on every (re)connect,
+ * since the session may have been evicted.
  */
 export class AgentConnection extends EventTarget implements AgentLink {
   view?: ViewMessage;
@@ -99,17 +105,26 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private ws?: WebSocket;
   private retry = 0;
   private closed = false;
-  private post?: PostContext;
-  private postTimer?: ReturnType<typeof setTimeout>;
+  private context?: Extract<ClientToServer, { type: "post" | "site" }>;
+  private contextTimer?: ReturnType<typeof setTimeout>;
   private extensions?: { specs: AgentExtensionSpec[]; json: string; run: (call: ExtensionCall) => Promise<unknown> };
 
-  constructor(private settings: AgentSettings, readonly id: string) {
+  constructor(
+    private settings: AgentSettings,
+    readonly id: string,
+    private path = `/api/sessions/${encodeURIComponent(id)}/ws`,
+  ) {
     super();
     this.connect();
   }
 
+  /** A connection to the site-wide assistant for one site. */
+  static forSite(settings: AgentSettings, siteId: string): AgentConnection {
+    return new AgentConnection(settings, siteSessionId(siteId), `/api/sites/${encodeURIComponent(siteId)}/session/ws`);
+  }
+
   private connect() {
-    const url = apiUrl(this.settings, `/api/sessions/${encodeURIComponent(this.id)}/ws`);
+    const url = apiUrl(this.settings, this.path);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     if (this.settings.token) url.searchParams.set("token", this.settings.token);
     this.status = "connecting";
@@ -118,7 +133,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
     ws.onopen = () => {
       this.retry = 0;
       this.status = "open";
-      if (this.post) this.send({ type: "post", post: this.post });
+      if (this.context) this.send(this.context);
       if (this.extensions) this.send({ type: "extensions", extensions: this.extensions.specs });
       this.changed();
     };
@@ -144,15 +159,23 @@ export class AgentConnection extends EventTarget implements AgentLink {
 
   /** Debounced: typing in the editor sends the text at most every 750 ms. */
   updatePost(post: PostContext) {
-    this.post = post;
-    clearTimeout(this.postTimer);
-    this.postTimer = setTimeout(() => this.send({ type: "post", post }), 750);
+    this.setContext({ type: "post", post });
   }
 
-  /** Sends the latest post immediately, then the prompt, so the agent reads what is on screen. */
+  updateSite(site: SiteContext) {
+    this.setContext({ type: "site", site });
+  }
+
+  private setContext(message: Extract<ClientToServer, { type: "post" | "site" }>) {
+    this.context = message;
+    clearTimeout(this.contextTimer);
+    this.contextTimer = setTimeout(() => this.send(message), 750);
+  }
+
+  /** Sends the latest context immediately, then the prompt, so the agent reads what is on screen. */
   prompt(text: string, model: { provider: string; modelId: string }, label?: string) {
-    clearTimeout(this.postTimer);
-    if (this.post) this.send({ type: "post", post: this.post });
+    clearTimeout(this.contextTimer);
+    if (this.context) this.send(this.context);
     this.send({ type: "prompt", text, model, label, requestId: crypto.randomUUID() });
   }
 
@@ -184,7 +207,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
 
   close() {
     this.closed = true;
-    clearTimeout(this.postTimer);
+    clearTimeout(this.contextTimer);
     this.ws?.close();
   }
 

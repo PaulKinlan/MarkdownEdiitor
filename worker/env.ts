@@ -1,11 +1,13 @@
 import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
+import type { SiteSession } from "./agent/site-session";
 import type { ExtensionStore } from "./extension-store";
 
 export interface Env {
   ASSETS: Fetcher;
   AGENT_SESSION: DurableObjectNamespace<AgentSession>;
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
+  SITE_SESSION: DurableObjectNamespace<SiteSession>;
   EXTENSION_STORE: DurableObjectNamespace<ExtensionStore>;
   /** When set, every /api request must carry it (Authorization: Bearer, or ?token= for WebSockets). */
   EDITOR_TOKEN?: string;

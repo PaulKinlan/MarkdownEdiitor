@@ -27,6 +27,8 @@ export class ExtensionController extends EventTarget {
   private site?: { id: string; handle: FileSystemDirectoryHandle };
   private changeTimer?: ReturnType<typeof setTimeout>;
   private connection?: AgentLink;
+  /** Other assistants (the site-wide one) that may call extension tools. */
+  private others = new Set<AgentLink>();
   private busy = false;
   private generation = 0;
 
@@ -122,8 +124,19 @@ export class ExtensionController extends EventTarget {
     this.host.emit(busy ? "agent:run-start" : "agent:run-end");
   };
 
+  /** Lets another assistant (the site-wide one) call extension tools too. */
+  attach(link: AgentLink) {
+    this.others.add(link);
+    link.setExtensions?.(this.host.agentSpecs, (call) => this.host.call(call));
+  }
+
+  detach(link: AgentLink | undefined) {
+    if (link) this.others.delete(link);
+  }
+
   private pushToAgent() {
-    this.connection?.setExtensions?.(this.host.agentSpecs, (call) => this.host.call(call));
+    const specs = this.host.agentSpecs;
+    for (const link of [this.connection, ...this.others]) link?.setExtensions?.(specs, (call) => this.host.call(call));
   }
 
   // ---- Managing extensions -----------------------------------------------------------
