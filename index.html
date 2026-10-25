@@ -4,8 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#1d2027" media="(prefers-color-scheme: dark)" />
+    <script>
+      // Apply a theme picked in settings before first paint (see src/lib/theme.ts).
+      try {
+        const theme = localStorage.getItem("md-editor:color-scheme");
+        if (theme === "light" || theme === "dark") document.querySelector('meta[name="color-scheme"]').content = theme;
+      } catch {}
+    </script>
+    <meta name="theme-color" content="#f5f5f3" media="(prefers-color-scheme: light)" data-scheme="light" />
+    <meta name="theme-color" content="#1d1e22" media="(prefers-color-scheme: dark)" data-scheme="dark" />
+    <script>
+      // Keep the browser and installed-app title bar in step with a pinned theme.
+      try {
+        const theme = localStorage.getItem("md-editor:color-scheme");
+        if (theme === "light" || theme === "dark") {
+          const color = document.querySelector(`meta[name="theme-color"][data-scheme="${theme}"]`).content;
+          for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = color;
+        }
+      } catch {}
+    </script>
     <title>Hugo Editor</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
