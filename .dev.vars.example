@@ -10,6 +10,8 @@ DEEPSEEK_API_KEY=
 # TAVILY_API_KEY=
 # Optional: require this token for /api requests (set it in the editor's agent settings too).
 # EDITOR_TOKEN=
+# Optional: editor origins allowed to call this API cross-origin, comma-separated.
+# ALLOWED_ORIGINS=http://localhost:5173
 
 # Optional: a scripted model for trying the agent loop without keys.
 # DEMO_MODEL=1

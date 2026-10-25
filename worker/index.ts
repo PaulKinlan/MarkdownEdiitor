@@ -12,6 +12,18 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    const cors = corsHeaders(request, env);
+    // Preflights carry no Authorization header, so answer them before checking the token.
+    if (request.method === "OPTIONS") return new Response(null, { status: cors ? 204 : 403, headers: cors });
+    const response = await route(request, url, env);
+    if (!cors || response.webSocket) return response;
+    const withCors = new Response(response.body, response);
+    for (const [k, v] of Object.entries(cors)) withCors.headers.set(k, v);
+    return withCors;
+  },
+} satisfies ExportedHandler<Env>;
+
+async function route(request: Request, url: URL, env: Env): Promise<Response> {
     if (url.pathname === "/api/health") return Response.json({ ok: true });
     if (!authorised(request, url, env)) return Response.json({ error: "Unauthorised" }, { status: 401 });
 
@@ -23,7 +35,7 @@ export default {
     }
 
     // /api/sessions/:id/ws, where id names one conversation (site + post).
-    let m = decodeURIComponent(url.pathname).match(/^\/api\/sessions\/([\w.:-]{1,200})\/ws$/);
+    let m = decodeURIComponent(url.pathname).match(/^\/api\/sessions\/([\w:-]{1,2048})\/ws$/);
     if (m) {
       const stub = env.AGENT_SESSION.get(env.AGENT_SESSION.idFromName(m[1]));
       return stub.fetch(request);
@@ -42,8 +54,26 @@ export default {
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
-  },
-} satisfies ExportedHandler<Env>;
+}
+
+/**
+ * CORS for editors served from another origin (Assistant settings → Agent
+ * server). Only origins listed in ALLOWED_ORIGINS get headers; same-origin
+ * requests need none. WebSockets aren't subject to CORS and use ?token=.
+ */
+function corsHeaders(request: Request, env: Env): Record<string, string> | undefined {
+  const origin = request.headers.get("Origin");
+  if (!origin || origin === new URL(request.url).origin) return undefined;
+  const allowed = (env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim());
+  if (!allowed.includes(origin) && !allowed.includes("*")) return undefined;
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
 
 function authorised(request: Request, url: URL, env: Env): boolean {
   if (!env.EDITOR_TOKEN) return true;

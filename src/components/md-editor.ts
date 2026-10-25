@@ -133,6 +133,8 @@ export class MdEditor extends LitElement {
       changes: { from: at, to: at + find.length, insert: replace },
       effects: EditorView.scrollIntoView(at, { y: "center" }),
     });
+    // Focus so Ctrl/⌘+Z reaches the editor's history straight after accepting.
+    this.view.focus();
     return true;
   }
 

@@ -73,3 +73,14 @@ describe("writing agent", () => {
     await harness.close(ctx);
   });
 });
+
+describe("sessionId", () => {
+  it("gives distinct paths distinct sessions, and matches the Worker's route", async () => {
+    const { sessionId } = await import("../src/lib/agent-client");
+    const a = sessionId("s1", "content/posts/a-b.md");
+    const b = sessionId("s1", "content/posts/a/b.md");
+    const long = sessionId("s1", `content/posts/${"x".repeat(300)}-é.md`);
+    expect(a).not.toBe(b);
+    for (const id of [a, b, long]) expect(id).toMatch(/^[\w:-]{1,2048}$/);
+  });
+});

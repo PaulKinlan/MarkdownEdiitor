@@ -47,8 +47,24 @@ export function uploadPosts(settings: AgentSettings, siteId: string, posts: unkn
   return api<{ count: number }>(settings, `/api/sites/${siteId}/index/upload`, { method: "POST", body: JSON.stringify(posts) });
 }
 
+/** One conversation per post: the site id plus the full path, base64url-encoded so distinct paths never collide. */
 export function sessionId(siteId: string, path: string): string {
-  return `${siteId}:${path.replace(/[^\w.-]+/g, "-")}`.slice(0, 200);
+  const bytes = new TextEncoder().encode(path);
+  const encoded = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${siteId}:${encoded}`;
+}
+
+const decisions = new Map<string, Map<string, string>>();
+
+/**
+ * Accept/reject decisions on proposed edits, per session. Kept outside the
+ * panel so switching tabs, hiding the side panel or reconnecting doesn't make
+ * decided edits pending again.
+ */
+export function editDecisions(id: string): Map<string, string> {
+  let map = decisions.get(id);
+  if (!map) decisions.set(id, (map = new Map()));
+  return map;
 }
 
 type ViewMessage = Extract<ServerToClient, { type: "view" }>;

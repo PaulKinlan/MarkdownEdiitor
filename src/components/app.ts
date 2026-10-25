@@ -351,7 +351,10 @@ export class MdApp extends LitElement {
       }
       const file = await writeFile(site.handle, path, text);
       const updated = summarise(path, config, Post.parse(text), file.lastModified);
-      if (site === this.site) this.posts = sortPosts(this.posts.map((p) => (p.path === path ? updated : p)));
+      if (site === this.site) {
+        this.posts = sortPosts(this.posts.map((p) => (p.path === path ? updated : p)));
+        void this.syncIndex();
+      }
       if (this.open?.summary.path !== path || site !== this.site) return;
       // Only what was written counts as saved; edits made during the write stay unsaved.
       open.savedText = text;
@@ -380,6 +383,7 @@ export class MdApp extends LitElement {
     const file = await writeFile(this.site.handle, path, post.toString());
     const summary = summarise(path, this.config, post, file.lastModified);
     this.posts = sortPosts([summary, ...this.posts]);
+    void this.syncIndex();
     this.newPostDialog?.close();
     await this.openPost(summary, true);
     this.flash(`Created ${path}`);
@@ -453,15 +457,26 @@ export class MdApp extends LitElement {
       this.agentError = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
-    if (!this.site) return;
-    try {
-      this.indexStatus = "Indexing posts for search…";
-      const uploaded = await syncSiteIndex(this.agentSettings, this.site.id, this.site.handle, this.posts);
-      this.indexStatus = uploaded ? `Indexed ${uploaded} post${uploaded === 1 ? "" : "s"}` : "";
-      if (uploaded) setTimeout(() => (this.indexStatus = ""), 4000);
-    } catch (e) {
-      this.indexStatus = `Search index not updated: ${e instanceof Error ? e.message : String(e)}`;
-    }
+    this.indexStatus = "Indexing posts for search…";
+    await this.syncIndex();
+  }
+
+  private indexing: Promise<void> = Promise.resolve();
+
+  /** Brings the site's search index up to date. Serialised, so saves in quick succession queue rather than race. */
+  private syncIndex(): Promise<void> {
+    this.indexing = this.indexing.then(async () => {
+      const { site, posts } = this;
+      if (!site) return;
+      try {
+        const uploaded = await syncSiteIndex(this.agentSettings, site.id, site.handle, posts);
+        this.indexStatus = uploaded > 1 ? `Indexed ${uploaded} posts` : "";
+        if (uploaded > 1) setTimeout(() => (this.indexStatus = ""), 4000);
+      } catch (e) {
+        this.indexStatus = `Search index not updated: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    });
+    return this.indexing;
   }
 
   private setModel(model: string) {
@@ -508,6 +523,8 @@ export class MdApp extends LitElement {
     try {
       this.open.post = Post.parse(next);
       this.text = next;
+      // Recreate the front matter form so an open raw draft shows the accepted change.
+      this.loadCount++;
       this.requestUpdate();
       e.detail.done(true);
     } catch {

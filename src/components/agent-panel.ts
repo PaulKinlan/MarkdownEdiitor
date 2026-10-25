@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { ChatItem, Edit, ModelInfo } from "../shared/protocol";
-import type { AgentConnection } from "../lib/agent-client";
+import { editDecisions, type AgentConnection } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, loadCustomActions, saveCustomActions, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
 import { controls } from "./shared";
@@ -68,7 +68,6 @@ export class AgentPanel extends LitElement {
   @property() configError = "";
 
   @state() private actions: EditAction[] = [...BUILTIN_ACTIONS, ...loadCustomActions()];
-  @state() private editStates = new Map<string, EditState>();
   @state() private error = "";
   @state() private editing?: EditAction;
 
@@ -89,7 +88,6 @@ export class AgentPanel extends LitElement {
       old?.removeEventListener("error", this.onError);
       this.connection?.addEventListener("change", this.onChange);
       this.connection?.addEventListener("error", this.onError);
-      this.editStates = new Map();
       this.error = "";
     }
   }
@@ -133,12 +131,22 @@ export class AgentPanel extends LitElement {
 
   private decide(key: string, edit: Edit, accept: boolean) {
     if (!accept) {
-      this.editStates = new Map(this.editStates).set(key, "rejected");
+      this.setState(key, "rejected");
       return;
     }
     let applied = false;
     this.dispatchEvent(new CustomEvent("apply-edit", { detail: { edit, done: (ok: boolean) => (applied = ok) }, bubbles: true, composed: true }));
-    this.editStates = new Map(this.editStates).set(key, applied ? "accepted" : "stale");
+    this.setState(key, applied ? "accepted" : "stale");
+  }
+
+  /** Decisions live with the session, not the panel, which is recreated on tab and visibility changes. */
+  private get editStates(): Map<string, EditState> {
+    return (this.connection ? editDecisions(this.connection.id) : new Map()) as Map<string, EditState>;
+  }
+
+  private setState(key: string, state: EditState) {
+    this.editStates.set(key, state);
+    this.requestUpdate();
   }
 
   private pendingEdits(items: ChatItem[]) {

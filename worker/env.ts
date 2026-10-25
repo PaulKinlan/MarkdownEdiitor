@@ -7,6 +7,8 @@ export interface Env {
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
   /** When set, every /api request must carry it (Authorization: Bearer, or ?token= for WebSockets). */
   EDITOR_TOKEN?: string;
+  /** Comma-separated editor origins allowed to call the API cross-origin (e.g. http://localhost:5173). */
+  ALLOWED_ORIGINS?: string;
   ANTHROPIC_API_KEY?: string;
   DEEPSEEK_API_KEY?: string;
   OPENAI_API_KEY?: string;
