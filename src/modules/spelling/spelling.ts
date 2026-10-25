@@ -2,7 +2,7 @@
 // checker should accept in this tab. The page can't read the dictionary back,
 // so this module remembers what it added in order to remove words later.
 
-import type { PostSummary } from "./posts";
+import type { PostSummary } from "../../lib/posts";
 
 export function canUseDictionary(): boolean {
   return !!document.spellCheckCustomDictionary;

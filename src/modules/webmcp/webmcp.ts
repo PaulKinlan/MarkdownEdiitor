@@ -3,7 +3,7 @@
 // the author watches. Edits made this way go through the editor like typing,
 // so Ctrl/⌘+Z undoes them, and nothing reaches disk until a save.
 
-import type { Edit } from "../shared/protocol";
+import type { Edit } from "../../shared/protocol";
 
 export interface EditorToolHost {
   currentPost(): { path: string; url: string; title: string; text: string; unsaved: boolean } | undefined;
