@@ -26,6 +26,18 @@ The **Assistant** tab next to the preview opens an agent conversation about the 
 - **Tools.** `read_post` and `propose_edits`. `search_posts` and `read_past_post` work over a full-text index of the site, kept in a per-site `SiteIndex` Durable Object that the editor syncs, uploading only changed files. `web_search` (Brave or Tavily) and `fetch_url` are available when a search key is set. For skills: `analyze_post` (length, outline, long sentences, vague links, missing alt text, front matter lengths), `calculate` (exact arithmetic), `table_stats` (column statistics for a markdown table or CSV) and `browser_support` (Chrome Status and webstatus.dev).
 - **Site rules.** A `CLAUDE.md` or `AGENTS.md` at the site root (aifoc.us has one) is sent as the site's writing rules and goes into the agent's system prompt.
 
+### The site assistant
+
+The **Post / Site** switch at the top of the Assistant tab moves between the open post's conversation and one conversation for the whole site. That one is kept in a `SiteSession` Durable Object, one per site. With no post open, the side panel shows the site assistant.
+
+- **Tools over every post.** `list_posts` filters by section, date, draft state, a front matter value, or a missing field. `list_terms` counts tags, categories or series across the site. `grep_posts` finds exact text or a regex in every file, front matter included. `read_post` reads any post. `search_posts`, `web_search` and `fetch_url` work as in the post assistant.
+- **Multi-file changes for review.** `propose_changes` sends find/replace edits grouped by file, or the full text of a new file. Each file shows as a card with its edits as word diffs, plus "Open" and "Accept all" buttons. Accepted edits to other files are written to disk straight away, one at a time. Edits to the open post go into the editor like the post assistant's, so you save them yourself.
+- **Site edits.** Research, Ideas from notes, Draft from note, Tidy tags, Cross-link posts, Check internal links, Missing metadata, Plan a series and Check site rules. Any text in the message box is sent along with an edit, e.g. the topic to research. Your own edits can run on the post or on the whole site.
+
+### Research notes
+
+**Notes** in the sidebar lists markdown files in `notes/` at the site root. It sits outside `content/`, so Hugo never publishes it, but it lives next to the posts and is versioned with git. A note has YAML front matter (`title`, `date`, `status`: idea, researching, ready or drafted, and `tags`) and sections for sources and notes. **Research** has the site assistant search the web and your past posts and save what it finds as a note. **Draft from note** turns a note into a draft post. Notes are indexed with the posts, so both assistants find them with `search_posts`.
+
 ### Agent configuration
 
 Set these as Worker secrets (`wrangler secret put NAME`), or as GitHub repository secrets, which the deploy workflow copies to each Worker:
@@ -123,12 +135,16 @@ src/sw/service-worker.ts Service worker (built to dist/sw.js by the plugin in vi
 public/                  Web app manifest, icons, Cloudflare _headers
 src/shared/protocol.ts   Messages between the editor and agent sessions
 worker/index.ts          Cloudflare Worker: app assets and /api routes
-worker/agent/session.ts  AgentSession Durable Object (Pi Durable harness per post)
-worker/agent/writing.ts  The writing extension: tools and system prompt sections
-worker/agent/skills.ts   The skills extension: skill catalog section and load_skill
-worker/agent/research.ts calculate, table_stats and browser_support
+worker/agent/conversation.ts  Base class for both sessions: Pi Durable harness, WebSocket, alarms
+worker/agent/session.ts  AgentSession Durable Object (one conversation per post)
+worker/agent/site-session.ts  SiteSession Durable Object (one conversation per site)
+worker/agent/writing.ts  The writing extension (post assistant): tools and system prompt sections
+worker/agent/site.ts     The site extension (site assistant): tools over every post, multi-file changes
+worker/agent/library.ts  search_posts, web_search and fetch_url, shared by both
+worker/agent/skills.ts   The skills extension: skill catalog section and load_skill (both scopes)
+worker/agent/research.ts calculate, table_stats and browser_support (both scopes)
 worker/agent/post-stats.ts  analyze_post
-worker/agent/site-index.ts  SiteIndex Durable Object (SQLite FTS5 over past posts)
+worker/agent/site-index.ts  SiteIndex Durable Object (SQLite FTS5, full files and front matter)
 ```
 
 ## Plan

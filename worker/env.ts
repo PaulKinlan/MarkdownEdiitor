@@ -1,11 +1,13 @@
 import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
+import type { SiteSession } from "./agent/site-session";
 import type { Observability } from "./observability/store";
 
 export interface Env {
   ASSETS: Fetcher;
   AGENT_SESSION: DurableObjectNamespace<AgentSession>;
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
+  SITE_SESSION: DurableObjectNamespace<SiteSession>;
   OBSERVABILITY: DurableObjectNamespace<Observability>;
   /** The deployed commit, set by the deploy workflow (--var COMMIT:<sha>). Reported by /api/health. */
   COMMIT?: string;
