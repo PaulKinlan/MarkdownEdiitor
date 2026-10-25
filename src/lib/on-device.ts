@@ -5,7 +5,7 @@
 import type { ChatItem, Edit, ModelInfo, PostContext } from "../shared/protocol";
 import { BUILTIN_SKILLS } from "../shared/builtin-skills";
 import { checkEdits } from "../shared/edits";
-import { inlineSkill, mergeSkills } from "../shared/skills";
+import { inlineSkill, mergeSkills, type Skill } from "../shared/skills";
 import type { AgentLink, ViewMessage } from "./agent-client";
 
 export const ON_DEVICE_PROVIDER = "chrome";
@@ -93,6 +93,7 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
   readonly status = "open" as const;
   view?: ViewMessage;
   private post?: PostContext;
+  private skills: Skill[] = [];
   private queue: Promise<void> = Promise.resolve();
   private controller?: AbortController;
   private conversation: Conversation;
@@ -110,6 +111,10 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
 
   updatePost(post: PostContext) {
     this.post = post;
+  }
+
+  updateSkills(skills: Skill[]) {
+    this.skills = skills;
   }
 
   prompt(text: string, _model: { provider: string; modelId: string }, label?: string) {
@@ -165,7 +170,7 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
       });
       this.partial = "Thinking on this device…";
       this.publish();
-      const input = await this.buildInput(session, post.text, inlineSkill(text, mergeSkills(BUILTIN_SKILLS, post.skills)));
+      const input = await this.buildInput(session, post.text, inlineSkill(text, mergeSkills(BUILTIN_SKILLS, this.skills, post.skills)));
       const raw = await session.prompt(input, { responseConstraint: RESPONSE_SCHEMA, signal: controller.signal });
       const { reply, edits } = parseResponse(raw);
       const { valid, problems } = checkEdits(post.text, edits);

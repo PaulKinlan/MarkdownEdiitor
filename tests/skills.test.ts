@@ -19,7 +19,8 @@ describe("skill files", () => {
     expect(parseSkillMarkdown("---\ndescription: d\n---\nbody", "site", "my-skill")?.name).toBe("my-skill");
     expect(parseSkillMarkdown("---\nname: x\n---\nbody")).toBeUndefined();
     expect(parseSkillMarkdown("---\nname: x\ndescription: d\n---\n")).toBeUndefined();
-    expect(parseSkillMarkdown("---\nname: Not Valid!\ndescription: d\n---\nbody")).toBeUndefined();
+    expect(parseSkillMarkdown("---\nname: Not Valid!\ndescription: d\n---\nbody")?.name).toBe("not-valid");
+    expect(parseSkillMarkdown("---\nname: \"!!!\"\ndescription: d\n---\nbody")).toBeUndefined();
     expect(parseSkillMarkdown("---\nname: [unclosed\n---\nbody")).toBeUndefined();
   });
 

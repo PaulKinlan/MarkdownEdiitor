@@ -4,6 +4,7 @@ import { createRegistry, Harness, type Conversation, type Wake } from "@earendil
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ClientToServer, ModelRef, PostContext, ServerToClient } from "../../src/shared/protocol";
+import { mergeSkills, type Skill } from "../../src/shared/skills";
 import type { Env } from "../env";
 import { createConfiguredModels } from "./models";
 import { projectView } from "./view";
@@ -26,6 +27,7 @@ export class AgentSession extends DurableObject<Env> {
   private root!: Conversation;
   private database: DurableObjectSqliteDatabase;
   private post?: PostContext;
+  private skills: Skill[] = [];
   private lastView = "";
   private pending?: ReturnType<typeof setTimeout>;
   private latest: unknown;
@@ -42,6 +44,8 @@ export class AgentSession extends DurableObject<Env> {
       await this.database.exec("CREATE TABLE IF NOT EXISTS editor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
       const row = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'post'");
       if (row) this.post = JSON.parse(row.value);
+      const skills = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'skills'");
+      if (skills) this.skills = JSON.parse(skills.value);
 
       const registry = createRegistry();
       registry.install(
@@ -54,7 +58,7 @@ export class AgentSession extends DurableObject<Env> {
         }),
       );
       registry.install(createResearchExtension());
-      registry.install(createSkillsExtension("post", () => this.post?.skills));
+      registry.install(createSkillsExtension("post", () => mergeSkills(this.skills, this.post?.skills)));
       const storage = await SqliteStorage.open(this.database, { prefix: "pi_" });
       this.harness = await Harness.open(
         storage,
@@ -97,6 +101,13 @@ export class AgentSession extends DurableObject<Env> {
           await this.database.run(
             "INSERT INTO editor_state (key, value) VALUES ('post', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             JSON.stringify(message.post),
+          );
+          break;
+        case "skills":
+          this.skills = message.skills;
+          await this.database.run(
+            "INSERT INTO editor_state (key, value) VALUES ('skills', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            JSON.stringify(message.skills),
           );
           break;
         case "prompt":

@@ -20,8 +20,23 @@ export interface Skill {
   title?: string;
   /** Which assistant the skill fits: one post, the whole site, or both. Defaults to "post". */
   scope?: SkillScope;
-  /** Where it came from: "builtin", "site", "custom", or "extension:<id>". */
+  /** Where it came from: "builtin", "site", "installed", or "extension:<id>". */
   source?: string;
+  /** For skills installed from GitHub: the folder they came from, to update them later. */
+  origin?: SkillOrigin;
+  /** For skills in the site folder: the folder that holds it, e.g. ".agents/skills/noslop". */
+  folder?: string;
+  /** Supporting files next to SKILL.md (relative path → text) that the instructions refer to. */
+  files?: Record<string, string>;
+}
+
+export interface SkillOrigin {
+  owner: string;
+  repo: string;
+  /** Branch, tag or commit; "HEAD" for the default branch. */
+  ref: string;
+  /** The skill's folder in the repo ("" for the root). */
+  path: string;
 }
 
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -37,7 +52,7 @@ export function parseSkillMarkdown(text: string, source?: string, fallbackName?:
       return undefined;
     }
   }
-  const name = String(data.name ?? fallbackName ?? "").trim().toLowerCase();
+  const name = toSkillName(String(data.name ?? fallbackName ?? ""));
   const description = typeof data.description === "string" ? data.description.trim() : "";
   const instructions = (match ? match[2] : text).trim();
   if (!NAME.test(name) || !description || !instructions) return undefined;
@@ -50,6 +65,15 @@ export function parseSkillMarkdown(text: string, source?: string, fallbackName?:
     ...(scope ? { scope } : {}),
     ...(source ? { source } : {}),
   };
+}
+
+/** Lowercase words joined by hyphens, as skill names are: "No_Slop Writer" → "no-slop-writer". */
+export function toSkillName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 /** Merges skill lists in order; a later skill replaces an earlier one with the same name. */
@@ -72,8 +96,18 @@ export function skillPrompt(skill: Skill): string {
   return `Use the ${skill.name} skill on this post.`;
 }
 
-/** Folders in a site where SKILL.md files are looked for, one skill per subfolder. */
+/** Folders in a site where SKILL.md files are looked for, one skill per subfolder. New installs go in the first. */
 export const SITE_SKILL_DIRS = [".agents/skills", ".claude/skills"];
+
+/** Supporting files are text, and capped so a skill stays small enough to send to the agent. */
+export const SKILL_FILE_LIMIT = 200_000;
+export const SKILL_TOTAL_LIMIT = 1_000_000;
+const TEXT_FILE = /\.(md|markdown|txt|json|ya?ml|toml|csv|tsv|html?|css|js|mjs|ts|xml|svg)$/i;
+
+/** Whether a file next to SKILL.md is worth keeping with the skill. */
+export function isSkillTextFile(path: string, size: number): boolean {
+  return TEXT_FILE.test(path) && size <= SKILL_FILE_LIMIT && !/(^|\/)\./.test(path) && !/(^|\/)LICENSE/i.test(path);
+}
 
 /**
  * For models without tools (the on-device one): when `text` runs a skill,

@@ -1,4 +1,5 @@
 import type { ClientToServer, ModelInfo, PostContext, ServerToClient } from "../shared/protocol";
+import type { Skill } from "../shared/skills";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
 
@@ -80,6 +81,8 @@ export interface AgentLink extends EventTarget {
   readonly view?: ViewMessage;
   readonly status: "connecting" | "open" | "closed";
   updatePost(post: PostContext): void;
+  /** Skills beyond the built-in ones. */
+  updateSkills(skills: Skill[]): void;
   prompt(text: string, model: { provider: string; modelId: string }, label?: string): void;
   abort(): void;
   reset(): void;
@@ -97,6 +100,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private retry = 0;
   private closed = false;
   private post?: PostContext;
+  private skills?: Skill[];
   private postTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private settings: AgentSettings, readonly id: string) {
@@ -115,6 +119,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
       this.retry = 0;
       this.status = "open";
       if (this.post) this.send({ type: "post", post: this.post });
+      if (this.skills) this.send({ type: "skills", skills: this.skills });
       this.changed();
     };
     ws.onmessage = (e) => {
@@ -140,6 +145,12 @@ export class AgentConnection extends EventTarget implements AgentLink {
     this.post = post;
     clearTimeout(this.postTimer);
     this.postTimer = setTimeout(() => this.send({ type: "post", post }), 750);
+  }
+
+  /** Sent now if connected, and again on every reconnect. */
+  updateSkills(skills: Skill[]) {
+    this.skills = skills;
+    if (this.ws?.readyState === WebSocket.OPEN) this.send({ type: "skills", skills });
   }
 
   /** Sends the latest post immediately, then the prompt, so the agent reads what is on screen. */
