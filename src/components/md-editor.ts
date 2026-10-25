@@ -20,18 +20,20 @@ import { syntaxHighlighting, defaultHighlightStyle, HighlightStyle } from "@code
 import { tags as t } from "@lezer/highlight";
 
 const markdownHighlight = HighlightStyle.define([
-  { tag: t.heading1, fontSize: "1.4em", fontWeight: "700" },
-  { tag: t.heading2, fontSize: "1.25em", fontWeight: "700" },
-  { tag: t.heading3, fontSize: "1.1em", fontWeight: "700" },
-  { tag: [t.heading4, t.heading5, t.heading6], fontWeight: "700" },
+  { tag: t.heading1, fontSize: "1.6em", fontWeight: "700", letterSpacing: "-0.015em" },
+  { tag: t.heading2, fontSize: "1.3em", fontWeight: "700", letterSpacing: "-0.01em" },
+  { tag: t.heading3, fontSize: "1.12em", fontWeight: "650" },
+  { tag: [t.heading4, t.heading5, t.heading6], fontWeight: "650" },
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
   { tag: t.strikethrough, textDecoration: "line-through" },
-  { tag: t.link, color: "var(--accent)" },
+  { tag: t.link, color: "var(--accent)", textDecoration: "underline", textDecorationColor: "color-mix(in srgb, var(--accent) 40%, transparent)", textUnderlineOffset: "3px" },
   { tag: t.url, color: "var(--fg-2)" },
-  { tag: t.monospace, fontFamily: "var(--mono)" },
-  { tag: [t.processingInstruction, t.meta], color: "var(--fg-2)" },
+  { tag: t.monospace, fontFamily: "var(--mono)", fontSize: "0.9em" },
+  // Markdown syntax (#, *, >, backticks) recedes so the words stand out.
+  { tag: [t.processingInstruction, t.meta], color: "color-mix(in srgb, var(--fg-2) 70%, transparent)" },
   { tag: t.quote, color: "var(--fg-2)", fontStyle: "italic" },
+  { tag: t.contentSeparator, color: "var(--fg-2)" },
 ]);
 
 /** Marks Hugo shortcodes (`{{< name ... >}}` and `{{% name %}}`) so they stand out from prose. */
@@ -53,21 +55,29 @@ const shortcodes = ViewPlugin.fromClass(
 );
 
 const editorTheme = EditorView.baseTheme({
-  "&": { height: "100%", fontSize: "15px" },
-  ".cm-scroller": { fontFamily: "var(--font)", lineHeight: "1.65", padding: "8px 0" },
-  ".cm-content": { maxWidth: "46em", margin: "0 auto", padding: "0 24px", caretColor: "var(--fg)" },
+  "&": { height: "100%", fontSize: "17px", color: "var(--fg)" },
+  ".cm-scroller": { fontFamily: "var(--font-editor)", lineHeight: "1.7", padding: "32px 0 40vh" },
+  ".cm-content": { maxWidth: "42em", margin: "0 auto", padding: "0 32px", caretColor: "var(--accent)" },
+  ".cm-line": { padding: "0" },
   ".cm-gutters": { display: "none" },
   "&.cm-focused": { outline: "none" },
-  ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--accent) 6%, transparent)" },
+  "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
+  ".cm-activeLine": { backgroundColor: "transparent" },
+  ".cm-placeholder": { color: "var(--fg-2)", fontStyle: "italic" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "color-mix(in srgb, var(--accent) 25%, transparent) !important",
+    backgroundColor: "color-mix(in srgb, var(--accent) 22%, transparent) !important",
   },
   ".cm-shortcode": {
     fontFamily: "var(--mono)",
-    fontSize: "0.9em",
+    fontSize: "0.82em",
     color: "var(--warn)",
     backgroundColor: "color-mix(in srgb, var(--warn) 10%, transparent)",
-    borderRadius: "3px",
+    borderRadius: "4px",
+    padding: "1px 3px",
+  },
+  "@media (max-width: 900px)": {
+    ".cm-scroller": { paddingTop: "16px" },
+    ".cm-content": { padding: "0 16px" },
   },
 });
 

@@ -12,7 +12,9 @@ import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings
 import { syncSiteIndex } from "../lib/indexer";
 import { listenForLaunches, persistStorage, registerServiceWorker, type Launch } from "../lib/pwa";
 import type { Edit, ModelInfo, PostContext } from "../shared/protocol";
-import { controls } from "./shared";
+import { controls, lightDismiss } from "./shared";
+import { icon } from "./icons";
+import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import type { MdEditor } from "./md-editor";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
@@ -32,16 +34,21 @@ const LAST_SITE_KEY = "md-editor:last-site";
 const PREVIEW_KEY = "md-editor:preview-open";
 const TAB_KEY = "md-editor:side-tab";
 const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 
 @customElement("md-app")
 export class MdApp extends LitElement {
   static styles = [
     controls,
     css`
-      :host { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
-      .top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
-      .top h1 { font-size: 14px; margin: 0 8px 0 0; }
+      :host { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; height: 100dvh; }
+      .top { display: flex; align-items: center; gap: 6px; padding: 0 10px; min-height: 44px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
+      .brand { display: flex; align-items: center; gap: 8px; margin-right: 6px; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+      .brand img { width: 20px; height: 20px; border-radius: 5px; }
+      .top select.site { font-weight: 500; background: transparent; border-color: transparent; }
+      .top select.site:hover { background: var(--hover); }
       .top .spacer { flex: 1; }
+      .top .divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
       /* Installed with window controls overlay: the top bar becomes the title bar. */
       @media (display-mode: window-controls-overlay) {
         .top {
@@ -51,50 +58,64 @@ export class MdApp extends LitElement {
           padding-left: calc(env(titlebar-area-x, 0px) + 12px);
           padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
         }
-        .top > :not(h1, .spacer) { app-region: no-drag; }
+        .top > :not(.brand, .spacer, .divider) { app-region: no-drag; }
       }
-      .body { display: grid; grid-template-columns: 300px minmax(0, 1fr) var(--preview-width, minmax(0, 1fr)); min-height: 0; }
-      .body.no-preview { grid-template-columns: 300px minmax(0, 1fr); }
+      .body { display: grid; grid-template-columns: 280px minmax(0, 1fr) var(--preview-width, minmax(0, 1fr)); min-height: 0; }
+      .body.no-preview { grid-template-columns: 280px minmax(0, 1fr); }
       .body.solo { grid-template-columns: minmax(0, 1fr); }
       aside { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--bg-2); }
-      .filters { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
-      .filters .row { display: flex; gap: 6px; }
-      .filters input[type="search"] { flex: 1; }
-      ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
-      li button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--border); content-visibility: auto; contain-intrinsic-size: auto 48px; }
-      li button:hover { background: var(--bg-3); }
+      .filters { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+      .filters .row { display: flex; gap: 6px; align-items: center; }
+      .search { position: relative; flex: 1; display: flex; min-width: 0; }
+      .search .icon { position: absolute; left: 8px; top: 50%; translate: 0 -50%; color: var(--fg-2); pointer-events: none; }
+      .search input { flex: 1; padding-left: 28px; }
+      .filters select { flex: 1; font-size: 13px; }
+      .filters label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+      .count { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-2); padding: 4px 16px 6px; }
+      ul { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; flex: 1; }
+      li button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 7px 10px; margin-bottom: 1px; border-radius: var(--radius); cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 50px; transition: background-color 100ms var(--ease); }
+      li button:hover { background: var(--hover); }
       li button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-      li button[aria-current="true"] { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-      .title { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .meta { display: block; font-size: 12px; color: var(--fg-2); }
-      .badge { font-size: 11px; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); margin-left: 4px; }
-      main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-      .toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-      .toolbar .path { font-family: var(--mono); font-size: 12px; color: var(--fg-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      li button[aria-current="true"] { background: var(--selected); }
+      li button[aria-current="true"] .title { color: var(--accent); }
+      .title { display: flex; align-items: center; gap: 6px; font-weight: 500; line-height: 1.35; }
+      .title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .meta { display: block; margin-top: 2px; font-size: 12px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .badge { flex: none; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+      main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+      .toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 12px; min-height: 40px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+      .toolbar .path { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; color: var(--fg-2); flex: 1; min-width: 0; }
+      .toolbar .path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+      .toolbar select { font-size: 13px; }
       md-editor { flex: 1; }
-      .side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+      .side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--bg-2); }
       .side > preview-pane, .side > agent-panel { flex: 1; }
-      .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-2); }
-      .tabs button { all: unset; cursor: pointer; padding: 6px 14px; font-size: 13px; color: var(--fg-2); border-bottom: 2px solid transparent; }
-      .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
-      .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-      .status { display: flex; gap: 16px; padding: 3px 12px; font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--border); background: var(--bg-2); }
-      .status .dirty { color: var(--warn); }
-      .status .error { color: var(--danger); }
-      .banner { padding: 8px 12px; background: color-mix(in srgb, var(--warn) 14%, transparent); display: flex; gap: 8px; align-items: center; }
-      .empty { display: grid; place-content: center; text-align: center; padding: 32px; gap: 12px; color: var(--fg-2); max-width: 40em; margin: auto; }
-      .empty h2 { color: var(--fg); margin: 0; }
-      .empty .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
-      dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--fg); padding: 20px; min-width: min(420px, 90vw); }
-      dialog::backdrop { background: rgb(0 0 0 / 0.35); }
-      dialog form { display: grid; gap: 10px; }
-      dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--fg-2); }
-      dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+      .tabs { display: flex; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+      .status { display: flex; align-items: center; gap: 14px; padding: 0 12px; min-height: 26px; font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--border); background: var(--bg-2); white-space: nowrap; overflow: hidden; }
+      .status > span { display: inline-flex; align-items: center; gap: 6px; }
+      .status .dot { width: 6px; height: 6px; background: var(--ok); }
+      .status .dirty .dot { background: var(--warn); }
+      .status .dirty { color: var(--fg); }
+      .status .error { color: var(--danger); overflow: hidden; text-overflow: ellipsis; }
+      .status .end { margin-left: auto; }
+      .banner { padding: 8px 12px; font-size: 13px; background: color-mix(in srgb, var(--warn) 12%, var(--bg)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .empty { display: grid; justify-items: center; text-align: center; padding: 32px; gap: 12px; color: var(--fg-2); max-width: 34em; margin: auto; line-height: 1.6; }
+      .empty .art { width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center; background: var(--bg-3); color: var(--fg-2); margin-bottom: 4px; }
+      .empty .art .icon { width: 26px; height: 26px; }
+      .empty h2 { color: var(--fg); margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+      .empty p { margin: 0; }
+      .empty .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+      .empty kbd { font-family: var(--font); font-size: 11px; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-2); }
+      dialog { width: min(440px, 92vw); }
+      dialog form { display: grid; gap: 12px; }
+      dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
       dialog .actions .left { margin-right: auto; }
+      dialog .seg { justify-self: start; }
       @media (max-width: 900px) {
         .body, .body.no-preview, .body.solo { grid-template-columns: 1fr; }
         aside { max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); }
         .side { display: none; }
+        .brand span { display: none; }
       }
     `,
   ];
@@ -116,6 +137,7 @@ export class MdApp extends LitElement {
   @state() private changedOnDisk = false;
   @state() private showPreview = localStorage.getItem(PREVIEW_KEY) !== "false";
   @state() private sideTab: "preview" | "assistant" = localStorage.getItem(TAB_KEY) === "assistant" ? "assistant" : "preview";
+  @state() private theme: Theme = getTheme();
   @state() private agentSettings: AgentSettings = loadAgentSettings();
   @state() private models: ModelInfo[] = [];
   @state() private agentError = "";
@@ -153,6 +175,7 @@ export class MdApp extends LitElement {
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
     window.addEventListener("keydown", this.onKeydown);
+    watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
     this.sites = await loadSites();
     listenForLaunches((launch) => void this.onLaunch(launch));
@@ -643,20 +666,25 @@ export class MdApp extends LitElement {
 
   private renderTop() {
     return html`<div class="top">
-      <h1>Hugo Editor</h1>
+      <div class="brand"><img src="/icons/icon.svg" alt="" /><span>Hugo Editor</span></div>
       ${this.sites.length
         ? html`<select
+            class="site"
             aria-label="Site"
             @change=${(e: Event) => this.selectSite(this.sites.find((s) => s.id === (e.target as HTMLSelectElement).value)!)}
           >
             ${this.sites.map((s) => html`<option value=${s.id} ?selected=${s.id === this.site?.id}>${s.name}</option>`)}
           </select>
-          <button class="ghost" ?disabled=${!this.site} @click=${() => this.settingsDialog?.showModal()}>Settings</button>`
+          <button class="ghost icon-only" aria-label="Site settings" title="Site settings" ?disabled=${!this.site} @click=${() => this.settingsDialog?.showModal()}>${icon("settings")}</button>`
         : nothing}
-      ${this.supportsPicker ? html`<button @click=${() => this.addSite()}>Add site folder…</button>` : nothing}
+      ${this.supportsPicker && this.sites.length
+        ? html`<button class="ghost icon-only" aria-label="Add site folder" title="Add site folder…" @click=${() => this.addSite()}>${icon("folder")}</button>`
+        : nothing}
       <span class="spacer"></span>
-      ${this.applyUpdate ? html`<button @click=${this.installUpdate} title="A new version of the editor is ready">Update</button>` : nothing}
-      ${this.open ? html`<button @click=${this.togglePreview} aria-pressed=${this.showPreview}>Side panel</button>` : nothing}
+      ${this.applyUpdate ? html`<button class="small" @click=${this.installUpdate} title="A new version of the editor is ready">${icon("refresh")} Update</button>` : nothing}
+      ${this.open
+        ? html`<button class="ghost icon-only" aria-label="Side panel" title="Preview and assistant" @click=${this.togglePreview} aria-pressed=${this.showPreview}>${icon("panel")}</button>`
+        : nothing}
       <button class="primary" ?disabled=${!this.dirty} @click=${this.save} title="Save (Ctrl/⌘+S)">Save</button>
     </div>`;
   }
@@ -664,6 +692,7 @@ export class MdApp extends LitElement {
   private renderEmpty() {
     if (this.site && this.needsPermission) {
       return html`<div class="empty">
+        <div class="art">${icon("folder")}</div>
         <h2>Reconnect to ${this.site.name}</h2>
         <p>The browser needs your OK again before the editor can read and write <code>${this.site.handle.name}</code>. Choose "Allow on every visit" to skip this next time.</p>
         <div class="actions"><button class="primary" @click=${this.reconnect}>Allow access</button></div>
@@ -671,6 +700,7 @@ export class MdApp extends LitElement {
     }
     if (!this.site) {
       return html`<div class="empty">
+        <div class="art">${icon("folder")}</div>
         <h2>Open a Hugo site</h2>
         ${this.supportsPicker
           ? html`<p>Pick the root folder of a Hugo site (the one with <code>hugo.toml</code> or <code>config.toml</code>). The editor reads and writes files there directly and remembers the folder for next time.</p>`
@@ -682,8 +712,12 @@ export class MdApp extends LitElement {
       </div>`;
     }
     return html`<div class="empty">
+      <div class="art">${icon("file")}</div>
       <h2>${this.loading ? "Loading posts…" : "Pick a post"}</h2>
-      ${this.loading ? nothing : html`<p>Choose a post on the left, or start a new one.</p>`}
+      ${this.loading
+        ? nothing
+        : html`<p>Choose a post on the left, or start a new one. Save any time with <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>S</kbd>.</p>
+            <div class="actions"><button class="primary" ?disabled=${!this.config} @click=${() => this.newPostDialog?.showModal()}>${icon("plus")} New post</button></div>`}
     </div>`;
   }
 
@@ -702,8 +736,11 @@ export class MdApp extends LitElement {
     return html`<aside>
       <div class="filters">
         <div class="row">
-          <input type="search" placeholder="Filter posts" aria-label="Filter posts" .value=${this.filter} @input=${(e: Event) => (this.filter = (e.target as HTMLInputElement).value)} />
-          <button class="primary" ?disabled=${!this.config} @click=${() => this.newPostDialog?.showModal()}>New</button>
+          <div class="search">
+            ${icon("search")}
+            <input type="search" placeholder="Filter posts" aria-label="Filter posts" .value=${this.filter} @input=${(e: Event) => (this.filter = (e.target as HTMLInputElement).value)} />
+          </div>
+          <button class="primary" ?disabled=${!this.config} @click=${() => this.newPostDialog?.showModal()} title="New post">${icon("plus")} New</button>
         </div>
         <div class="row">
           ${secs.length > 1
@@ -714,14 +751,14 @@ export class MdApp extends LitElement {
             : nothing}
           <label class="muted"><input type="checkbox" .checked=${this.draftsOnly} @change=${(e: Event) => (this.draftsOnly = (e.target as HTMLInputElement).checked)} /> Drafts only</label>
         </div>
-        <span class="muted">${this.loading ? "Loading…" : `${posts.length} of ${this.posts.length} posts`}</span>
       </div>
+      <div class="count">${this.loading ? "Loading…" : posts.length === this.posts.length ? `${posts.length} posts` : `${posts.length} of ${this.posts.length} posts`}</div>
       <ul>
         ${posts.map(
           (p) => html`<li>
             <button aria-current=${p.path === this.open?.summary.path} @click=${() => this.openPost(p)}>
-              <span class="title">${p.title}${p.draft ? html`<span class="badge">draft</span>` : nothing}</span>
-              <span class="meta">${p.date ? p.date.toISOString().slice(0, 10) : "no date"} · ${p.url}</span>
+              <span class="title"><span>${p.title}</span>${p.draft ? html`<span class="badge">Draft</span>` : nothing}</span>
+              <span class="meta">${p.date ? DATE_FORMAT.format(p.date) : "No date"} · ${p.url}</span>
             </button>
           </li>`,
         )}
@@ -752,7 +789,7 @@ export class MdApp extends LitElement {
         ></frontmatter-form>`,
       )}
       <div class="toolbar">
-        <span class="path" title=${summary.path}>${summary.path}</span>
+        <span class="path" title=${summary.path}>${icon("file")}<span>${summary.path}</span></span>
         ${this.shortcodes.length
           ? html`<select aria-label="Insert shortcode" @change=${this.insertShortcode}>
               <option value="">Insert shortcode…</option>
@@ -769,13 +806,14 @@ export class MdApp extends LitElement {
     return html`
       <dialog
         id="new-post"
+        aria-labelledby="new-post-title"
         @close=${(e: Event) => {
           ((e.target as HTMLDialogElement).querySelector("form") as HTMLFormElement)?.reset();
           this.shared = undefined;
         }}
       >
         <form @submit=${this.createPost}>
-          <h3>New post</h3>
+          <h3 id="new-post-title">New post</h3>
           <label>Title <input name="title" required autofocus .value=${this.shared?.title ?? ""} /></label>
           ${secs.length > 1
             ? html`<label>Section
@@ -790,21 +828,29 @@ export class MdApp extends LitElement {
           </div>
         </form>
       </dialog>
-      <dialog id="site-settings">
+      <dialog id="site-settings" closedby="any" aria-labelledby="site-settings-title" @click=${lightDismiss}>
         ${this.site
           ? html`<form method="dialog">
-              <h3>Site settings</h3>
+              <h3 id="site-settings-title">Site settings</h3>
               <label>Name <input .value=${this.site.name} @change=${(e: Event) => this.updateSite({ name: (e.target as HTMLInputElement).value })} /></label>
               <label>Preview server
                 <input .value=${this.site.previewOrigin} @change=${(e: Event) => this.updateSite({ previewOrigin: (e.target as HTMLInputElement).value.replace(/\/$/, "") })} />
               </label>
+              <h4>Appearance</h4>
+              <div class="seg" role="group" aria-label="Theme">
+                ${(["system", "light", "dark"] as const).map(
+                  (t) => html`<button type="button" aria-pressed=${this.theme === t} @click=${() => ((this.theme = t), setTheme(t))}>
+                    ${t === "system" ? "System" : t === "light" ? "Light" : "Dark"}
+                  </button>`,
+                )}
+              </div>
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
               <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
-                <button type="button" class="left" @click=${this.removeSite}>Remove site</button>
+                <button type="button" class="left ghost danger" @click=${this.removeSite}>Remove site</button>
                 <button type="button" @click=${() => this.loadSite()}>Rescan</button>
                 <button class="primary">Done</button>
               </div>
@@ -816,10 +862,10 @@ export class MdApp extends LitElement {
 
   private renderSide() {
     return html`<section class="side">
-      <div class="tabs" role="tablist">
+      <div class="tabs"><div class="seg" role="tablist">
         <button role="tab" aria-selected=${this.sideTab === "preview"} @click=${() => this.setSideTab("preview")}>Preview</button>
         <button role="tab" aria-selected=${this.sideTab === "assistant"} @click=${() => this.setSideTab("assistant")}>Assistant</button>
-      </div>
+      </div></div>
       ${this.sideTab === "preview"
         ? html`<preview-pane
             .origin=${this.site!.previewOrigin}
@@ -841,11 +887,11 @@ export class MdApp extends LitElement {
   private renderStatus() {
     const words = this.open ? (this.open.post.body.match(/[\p{L}\p{N}’']+/gu) ?? []).length : 0;
     return html`<div class="status" role="status">
-      ${this.open ? html`<span class=${this.dirty ? "dirty" : ""}>${this.dirty ? "Unsaved changes" : "Saved"}</span>
-          <span>${words.toLocaleString()} words · ${Math.max(1, Math.round(words / 230))} min read</span>` : nothing}
+      ${this.open ? html`<span class=${this.dirty ? "dirty" : ""}><span class="dot"></span>${this.dirty ? "Unsaved changes" : "Saved"}</span>` : nothing}
       ${this.error ? html`<span class="error">${this.error}</span>` : nothing}
       ${this.message ? html`<span>${this.message}</span>` : nothing}
       ${this.indexStatus ? html`<span>${this.indexStatus}</span>` : nothing}
+      ${this.open ? html`<span class="end">${words.toLocaleString()} words · ${Math.max(1, Math.round(words / 230))} min read</span>` : nothing}
     </div>`;
   }
 
