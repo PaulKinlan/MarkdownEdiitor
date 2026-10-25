@@ -113,7 +113,7 @@ All need `ui`.
 - `const s = editor.ui.status(id, text, title?)`: an item in the status bar. `s.set(text, title?)` changes it, `s.set("")` hides it, `s.remove()` removes it. Keep `text` under 80 characters; `title` is the hover text.
 - `editor.ui.toolbarButton({ id, label, title?, run })`: a button in the editor toolbar. Returns a function that removes it.
 - `editor.registerCommand({ id, title, key?, run })`: a command in the command palette (Ctrl/⌘+Shift+P, or Commands… in the toolbar). `key` is a CodeMirror-style shortcut: `"Mod-Shift-l"` (Mod is ⌘ on a Mac, Ctrl elsewhere), `"Alt-k"`, `"Ctrl-Enter"`. Returns a function that removes it.
-- `const panel = editor.ui.panel({ id, title, html? })`: a tab in the side panel next to Preview and Assistant. It shows `html` as a whole page in a sandboxed iframe (scripts run; no access to the editor page, its storage or the network beyond what the page itself loads).
+- `const panel = editor.ui.panel({ id, title, html? })`: a tab in the side panel next to Preview and Assistant. It shows `html` as a whole page in a sandboxed iframe: inline scripts and styles run, and images, fonts and stylesheets can load from https, but it has no access to the editor page or its storage, and no `fetch()`.
   - `await panel.render(html)`: replaces the page.
   - `panel.onMessage(handler)`: messages the page sends with `parent.postMessage(data, "*")`.
   - `await panel.post(data)`: sends `data` to the page (`window.addEventListener("message", …)` there).

@@ -53,7 +53,7 @@ export const controls = css`
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   }
   button:focus-visible, a:focus-visible, summary:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 3px solid var(--accent);
     outline-offset: 2px;
   }
   .muted { color: var(--fg-2); }
@@ -74,6 +74,8 @@ export const controls = css`
     color: var(--fg);
     padding: 20px 22px;
     box-shadow: var(--shadow);
+    /* Scrolling past the end of a long dialog mustn't scroll the editor behind it. */
+    overscroll-behavior: contain;
     opacity: 0;
     translate: 0 8px;
     transition: opacity 160ms var(--ease), translate 160ms var(--ease), display 160ms allow-discrete, overlay 160ms allow-discrete;
@@ -94,6 +96,8 @@ export const controls = css`
   dialog h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
   dialog h4 { margin: 10px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-2); }
   dialog label { display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--fg-2); }
+  /* A label that sits in a sentence (a checkbox in a paragraph). */
+  dialog label.inline { display: inline; }
   dialog label > :is(input, select, textarea) { font-size: 14px; color: var(--fg); font-weight: 400; }
   dialog p { margin: 0; font-size: 13px; line-height: 1.5; }
   @media (prefers-reduced-motion: reduce) {

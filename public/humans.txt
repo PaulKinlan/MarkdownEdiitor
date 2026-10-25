@@ -1,0 +1,9 @@
+/* TEAM */
+Owner: Paul Kinlan
+Site: https://paul.kinlan.me
+Source: https://github.com/PaulKinlan/MarkdownEdiitor
+
+/* SITE */
+Standards: HTML, CSS, TypeScript, Web Components (Lit), File System Access, Service Workers, Web App Manifest
+Components: CodeMirror 6, Lit, Earendil Pi Durable
+Hosting: Cloudflare Workers, Static Assets, Durable Objects (SQLite)

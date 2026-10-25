@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { defineConfig, transformWithOxc, type Plugin } from "vite";
 
 /** Adds an origin-trial meta tag for each token in ORIGIN_TRIAL_TOKENS (comma-separated), e.g. for WebMCP. */
@@ -13,7 +13,8 @@ function originTrials() {
 
 export default defineConfig({
   build: { outDir: "dist", target: "es2022" },
-  plugins: [originTrials(), extensionWorkers(), serviceWorker()],
+  define: { __COMMIT__: JSON.stringify(process.env.GITHUB_SHA ?? "dev") },
+  plugins: [originTrials(), extensionWorkers(), serviceWorker(), securityHeaders()],
   // `npm run dev:worker` serves the agent API on 8787.
   server: { proxy: { "/api": { target: "http://localhost:8787", ws: true } } },
   test: { environment: "node", include: ["tests/**/*.test.ts"] },
@@ -64,6 +65,33 @@ function serviceWorker(): Plugin {
       const { code } = await transformWithOxc(source, "service-worker.ts");
       const header = `const PRECACHE = ${JSON.stringify(precache)};\nconst VERSION = ${JSON.stringify(hash.digest("hex").slice(0, 12))};\n`;
       this.emitFile({ type: "asset", fileName: "sw.js", source: header + code });
+    },
+  };
+}
+
+/**
+ * Fills the CSP in dist/_headers with the SHA-256 hashes of index.html's
+ * inline scripts (the pre-paint theme scripts), so the policy allows exactly
+ * those and nothing else inline. Hashes rather than nonces: the page is a
+ * static asset, so no code runs per request to mint a nonce.
+ */
+function securityHeaders(): Plugin {
+  let hashes: string[] = [];
+  return {
+    name: "security-headers",
+    apply: "build",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      const html = bundle["index.html"];
+      const source = html?.type === "asset" ? String(html.source) : "";
+      hashes = [...source.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+        .map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`);
+    },
+    async writeBundle(options) {
+      const file = `${options.dir ?? "dist"}/_headers`;
+      const headers = await readFile(file, "utf8");
+      if (!headers.includes("__SCRIPT_HASHES__")) throw new Error("_headers has no __SCRIPT_HASHES__ placeholder");
+      await writeFile(file, headers.replaceAll("__SCRIPT_HASHES__", hashes.join(" ")));
     },
   };
 }

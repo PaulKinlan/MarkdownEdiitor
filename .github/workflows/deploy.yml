@@ -52,6 +52,8 @@ jobs:
         env:
           # Origin trial tokens (e.g. WebMCP), comma-separated. Optional.
           ORIGIN_TRIAL_TOKENS: ${{ secrets.ORIGIN_TRIAL_TOKENS }}
+      - run: node scripts/check-discovery.mjs
+      - run: node scripts/check-perf-budget.mjs
 
       - name: Work out the Worker name
         id: target
@@ -78,14 +80,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           name="${{ steps.target.outputs.name }}"
-          extra=""
-          if [ "${{ github.ref_name }}" != "main" ]; then extra="--var DEMO_MODEL:1"; fi
+          # COMMIT lets /api/health name the deploy, so open editors notice it.
+          extra="--var COMMIT:${{ github.sha }}"
+          if [ "${{ github.ref_name }}" != "main" ]; then extra="$extra --var DEMO_MODEL:1"; fi
           deploy() { npx wrangler deploy --name "$name" $extra 2>&1 | tee deploy.log; }
           if ! deploy; then
             # A preview that applied this branch's migration before main added its own (merged in later) can't
-            # apply main's: Cloudflare only runs migrations after the last tag it applied. Previews are
-            # disposable, so start this one again from scratch. A preview whose migrations were renumbered
-            # by a merge (code 10074) is started again the same way.
+            # apply main's: Cloudflare only runs migrations after the last tag it applied (10061), and won't
+            # re-create a class an earlier tag already made (10074). Previews are
+            # disposable, so start this one again from scratch.
             if [ "${{ github.ref_name }}" != "main" ] && grep -qE "code: (10061|10074)" deploy.log; then
               echo "::warning::Durable Object migrations on $name are out of order; deleting and redeploying the preview."
               npx wrangler delete --name "$name" --force

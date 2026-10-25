@@ -71,9 +71,10 @@ function fromUrl(href?: string): Launch {
  */
 export async function registerServiceWorker(onUpdate: (apply: () => void) => void) {
   if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
+  if ((await fetchHealth())?.killSw) return removeServiceWorker();
   let registration: ServiceWorkerRegistration;
   try {
-    registration = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+    registration = await navigator.serviceWorker.register(swUrl(), { updateViaCache: "none" });
   } catch (e) {
     console.warn("Service worker registration failed", e);
     return;
@@ -104,12 +105,51 @@ export async function registerServiceWorker(onUpdate: (apply: () => void) => voi
   });
 
   // An installed app can stay open for days: look for a new deploy when it comes back into view.
-  let lastCheck = Date.now();
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible" || Date.now() - lastCheck < 30 * 60_000) return;
-    lastCheck = Date.now();
+  // /api/health names the deployed commit, so a deploy is noticed on the next look rather than
+  // after the browser's own update check; without a commit, check every half hour.
+  let lastHealth = Date.now();
+  let lastUpdate = Date.now();
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible" || Date.now() - lastHealth < 60_000) return;
+    lastHealth = Date.now();
+    const health = await fetchHealth();
+    if (health?.killSw) return removeServiceWorker();
+    const drift = !!health?.commit && health.commit !== "dev" && health.commit !== __COMMIT__;
+    if (!drift && Date.now() - lastUpdate < 30 * 60_000) return;
+    lastUpdate = Date.now();
     void registration.update().catch(() => {});
   });
+}
+
+/**
+ * The worker's URL as a TrustedScriptURL where Trusted Types are on (the CSP
+ * asks for them), from a policy that allows only that one URL.
+ */
+function swUrl(): string {
+  const tt = (window as Window & { trustedTypes?: { createPolicy(name: string, rules: { createScriptURL(url: string): string }): { createScriptURL(url: string): string } } }).trustedTypes;
+  if (!tt) return "/sw.js";
+  const policy = tt.createPolicy("service-worker", {
+    createScriptURL: (url) => {
+      if (url !== "/sw.js") throw new TypeError(`Not the service worker: ${url}`);
+      return url;
+    },
+  });
+  return policy.createScriptURL("/sw.js");
+}
+
+async function fetchHealth(): Promise<{ commit?: string; killSw?: boolean } | undefined> {
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    return res.ok ? await res.json() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The emergency switch (KILL_SW=1 on the Worker): drop every service worker and cache, so the next load is plain network. */
+async function removeServiceWorker() {
+  for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+  for (const key of await caches.keys()) await caches.delete(key);
 }
 
 /**

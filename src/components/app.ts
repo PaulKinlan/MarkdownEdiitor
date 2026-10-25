@@ -36,10 +36,8 @@ import "./md-editor";
 import "./frontmatter-form";
 import "./preview-pane";
 import "./agent-panel";
-import "./extensions-dialog";
-import "./command-palette";
-import { keyLabel, type CommandPalette, type PaletteCommand } from "./command-palette";
-import "./tools-settings";
+import type { CommandPalette, PaletteCommand } from "./command-palette";
+import { keyLabel } from "../lib/keys";
 import type { ToolsSettings } from "./tools-settings";
 
 interface OpenPost {
@@ -60,6 +58,10 @@ const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
 const NARROW = matchMedia("(max-width: 900px)");
 type MobileView = "posts" | "write" | "preview" | "assistant";
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+
+
+/** public/extension-panel.html. Cloudflare serves it without the extension (and redirects to that), Vite only with it. */
+const PANEL_PAGE = import.meta.env.PROD ? "/extension-panel" : "/extension-panel.html";
 
 @customElement("md-app")
 export class MdApp extends LitElement {
@@ -244,6 +246,25 @@ export class MdApp extends LitElement {
   @query("extensions-dialog") private extensionsDialog?: ExtensionsDialog;
   @query("command-palette") private palette?: CommandPalette;
   @query("tools-settings") private toolsSettings?: ToolsSettings;
+
+  // These dialogs are loaded on first use, to keep them out of the boot bundle.
+  private async showExtensions() {
+    await import("./extensions-dialog");
+    await this.updateComplete;
+    this.extensionsDialog?.show();
+  }
+
+  private async openPalette() {
+    await import("./command-palette");
+    await this.updateComplete;
+    this.palette?.open();
+  }
+
+  private async showToolsSettings() {
+    await import("./tools-settings");
+    await this.updateComplete;
+    this.toolsSettings?.show();
+  }
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
   // Bumped on each site or post load, so a slow load that finishes after the user moved on is dropped.
@@ -800,7 +821,7 @@ export class MdApp extends LitElement {
       void this.save();
     } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
       e.preventDefault();
-      this.palette?.open();
+      void this.openPalette();
     } else if (!e.defaultPrevented) {
       this.extensions.host.handleKey(e);
     }
@@ -1411,7 +1432,7 @@ export class MdApp extends LitElement {
                 ></textarea>
               </label>
               <p class="muted">
-                <label style="display:inline"><input type="checkbox" .checked=${this.checkSpelling} @change=${(e: Event) => this.setCheckSpelling((e.target as HTMLInputElement).checked)} /> Check spelling in the editor</label>.
+                <label class="inline"><input type="checkbox" .checked=${this.checkSpelling} @change=${(e: Event) => this.setCheckSpelling((e.target as HTMLInputElement).checked)} /> Check spelling in the editor</label>.
                 ${canUseDictionary()
                   ? "These words, and the site's tags and categories, aren't marked as misspelled."
                   : "Chrome 159 and later stop marking these words, and the site's tags and categories, as misspelled."}
@@ -1427,12 +1448,12 @@ export class MdApp extends LitElement {
               <h4>Extensions</h4>
               <p class="muted">
                 ${this.extensions.entries.filter((e) => e.enabled).length} of ${this.extensions.entries.length} on.
-                <button type="button" class="small" @click=${() => this.extensionsDialog?.show()}>${icon("puzzle")} Manage extensions…</button>
+                <button type="button" class="small" @click=${() => this.showExtensions()}>${icon("puzzle")} Manage extensions…</button>
               </p>
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
-              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.toolsSettings?.show()}>Tools and MCP servers…</button></div>
+              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.showToolsSettings()}>Tools and MCP servers…</button></div>
               <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
@@ -1456,7 +1477,7 @@ export class MdApp extends LitElement {
       (b) => html`<button class="small ghost" title=${b.spec.title ?? `${b.spec.label} (${b.name})`} @click=${() => this.extensions.host.clickButton(b.extension, b.spec.id)}>${b.spec.label}</button>`,
     )}
     ${commands.length
-      ? html`<button class="small ghost" title=${`Commands (${keyLabel("Mod-Shift-p")})`} @click=${() => this.palette?.open()}>Commands…</button>`
+      ? html`<button class="small ghost" title=${`Commands (${keyLabel("Mod-Shift-p")})`} @click=${() => this.openPalette()}>Commands…</button>`
       : nothing}`;
   }
 
@@ -1465,7 +1486,7 @@ export class MdApp extends LitElement {
     const out: PaletteCommand[] = [];
     if (this.open) out.push({ id: "save", title: "Save", key: "Mod-s", run: () => void this.save() });
     out.push({ id: "preview", title: this.showPreview ? "Hide side panel" : "Show side panel", run: () => this.togglePreview() });
-    if (this.site) out.push({ id: "extensions", title: "Manage extensions…", run: () => this.extensionsDialog?.show() });
+    if (this.site) out.push({ id: "extensions", title: "Manage extensions…", run: () => this.showExtensions() });
     for (const c of this.extensions.host.commands) {
       out.push({ id: `${c.extension}:${c.spec.id}`, title: c.spec.title, detail: c.name, key: c.spec.key, run: () => void this.extensions.host.runCommand(c.extension, c.spec.id) });
     }
@@ -1538,16 +1559,28 @@ export class MdApp extends LitElement {
   private renderExtensionPanel(tab: string) {
     const panel = this.extensions.host.panels.find((p) => `ext:${p.extension}:${p.spec.id}` === tab);
     if (!panel) return html`<div class="empty"><p>This panel's extension isn't running.</p></div>`;
+    // A new frame for each render. The frame loads public/extension-panel.html,
+    // which has its own CSP, then swaps in the panel's HTML when it's posted.
     return keyed(
-      tab,
+      `${tab}\u0000${panel.spec.html}`,
       html`<iframe
         class="ext-panel"
         title=${`${panel.spec.title} (${panel.name})`}
         sandbox="allow-scripts allow-forms allow-popups"
-        .srcdoc=${panel.spec.html}
-        @load=${(e: Event) => this.extensions.host.attachPanel(panel.extension, panel.spec.id, (e.target as HTMLIFrameElement).contentWindow)}
+        src=${PANEL_PAGE}
+        @load=${(e: Event) => this.loadPanel(e.target as HTMLIFrameElement, panel.extension, panel.spec.id, panel.spec.html)}
       ></iframe>`,
     );
+  }
+
+  private loadedPanels = new WeakSet<HTMLIFrameElement>();
+
+  private loadPanel(frame: HTMLIFrameElement, extension: string, id: string, markup: string) {
+    // The frame fires load again once the panel's own page is written; that one isn't ours.
+    if (this.loadedPanels.has(frame) || !frame.contentWindow) return;
+    this.loadedPanels.add(frame);
+    this.extensions.host.attachPanel(extension, id, frame.contentWindow);
+    frame.contentWindow.postMessage({ type: "extension-panel:html", html: markup }, "*");
   }
 
   private renderStatus() {

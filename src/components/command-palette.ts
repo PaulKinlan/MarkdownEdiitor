@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
+import { keyLabel } from "../lib/keys";
 import { controls, lightDismiss } from "./shared";
 
 export interface PaletteCommand {
@@ -9,16 +10,6 @@ export interface PaletteCommand {
   detail?: string;
   key?: string;
   run: () => void;
-}
-
-const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-
-/** Shows a CodeMirror-style key the way this platform writes it. */
-export function keyLabel(key: string): string {
-  return key
-    .split("-")
-    .map((part) => (part === "Mod" ? (MAC ? "⌘" : "Ctrl") : part === "Shift" ? (MAC ? "⇧" : "Shift") : part === "Alt" ? (MAC ? "⌥" : "Alt") : part.length === 1 ? part.toUpperCase() : part))
-    .join(MAC ? "" : "+");
 }
 
 /** The command palette: type to filter every command, Enter runs the first match. */

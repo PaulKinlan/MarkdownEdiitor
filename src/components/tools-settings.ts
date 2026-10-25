@@ -31,6 +31,7 @@ export class ToolsSettings extends LitElement {
       .stack { display: grid; gap: 12px; }
       .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--fg); font-weight: 400; }
       .check input { margin-top: 3px; }
+      .check.fixed { flex: 0 0 auto; }
       .list { display: grid; gap: 4px; }
       .source { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); }
       .source .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -300,7 +301,7 @@ export class ToolsSettings extends LitElement {
               <option value="path">path</option>
               <option value="body">body</option>
             </select>
-            <label class="check" style="flex:0 0 auto"><input type="checkbox" .checked=${!!p.required} @change=${(e: Event) => setParam(i, { required: (e.target as HTMLInputElement).checked })} /> required</label>
+            <label class="check fixed"><input type="checkbox" .checked=${!!p.required} @change=${(e: Event) => setParam(i, { required: (e.target as HTMLInputElement).checked })} /> required</label>
             <input aria-label="Description" placeholder="Description" .value=${p.description ?? ""} @change=${(e: Event) => setParam(i, { description: (e.target as HTMLInputElement).value })} />
             <button type="button" class="small ghost" aria-label="Remove parameter" @click=${() => this.patch({ params: src.params.filter((_, j) => j !== i) })}>✕</button>
           </div>`,

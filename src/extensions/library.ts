@@ -13,7 +13,6 @@
 import { get, set } from "idb-keyval";
 import { apiUrl, type AgentSettings } from "../lib/agent-client";
 import { getDir } from "../lib/fs";
-import { builtinExtensions } from "./builtin";
 import { parseExtension } from "./loader";
 import type { ExtensionRecord, Permission } from "./types";
 
@@ -65,10 +64,15 @@ function entry(record: ExtensionRecord, key: string, approvals: Approvals, extra
   return { ...record, key, unapproved, enabled: everApproved && !unapproved.length && !approvals.disabled.includes(key), ...extra };
 }
 
+/** The built-ins' sources are a separate chunk, loaded once the editor is up, so they stay out of the boot bundle. */
+async function builtins(): Promise<ExtensionRecord[]> {
+  return (await import("./builtin")).builtinExtensions();
+}
+
 /** Every known extension for this site, with whether it may run. */
 export async function listExtensions(site?: { id: string; handle: FileSystemDirectoryHandle }): Promise<LibraryEntry[]> {
   const approvals = await loadApprovals();
-  const out: LibraryEntry[] = builtinExtensions().map((r) => entry(r, `builtin:${r.manifest.id}`, approvals));
+  const out: LibraryEntry[] = (await builtins()).map((r) => entry(r, `builtin:${r.manifest.id}`, approvals));
   for (const item of await loadInstalled()) {
     if (item.deleted) continue;
     try {
@@ -141,7 +145,7 @@ export async function setEnabled(key: string, enabled: boolean) {
 export async function install(source: string, from: string | undefined, settings?: AgentSettings): Promise<ExtensionRecord> {
   const record = { ...parseExtension(source), origin: "installed" as const, ...(from ? { from } : {}) };
   const id = record.manifest.id;
-  const builtin = builtinExtensions().some((b) => b.manifest.id === id);
+  const builtin = (await builtins()).some((b) => b.manifest.id === id);
   if (builtin) throw new Error(`${id} is the id of a built-in extension; pick another.`);
   const list = (await loadInstalled()).filter((i) => i.id !== id);
   const item: Installed = { id, source, ...(from ? { from } : {}), updatedAt: Date.now() };

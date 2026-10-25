@@ -6,6 +6,7 @@
 
 import { get as idbGet, set as idbSet } from "idb-keyval";
 import bundledWorker from "./worker.ts?worker&url";
+import { workerScriptUrl } from "./trusted";
 import { type AgentExtensionSpec, type ExtensionCall, type ExtensionCallResults } from "../shared/extensions";
 import {
   METHOD_PERMISSIONS,
@@ -129,7 +130,7 @@ export class ExtensionHost extends EventTarget {
     this.timeouts = { ...TIMEOUTS, ...options.timeouts };
     this.storage = options.storage ?? { get: (k) => idbGet(k), set: (k, v) => idbSet(k, v) };
     this.createWorker =
-      options.createWorker ?? ((name, network) => new Worker(workerUrl(network), { type: "module", name }) as unknown as WorkerLike);
+      options.createWorker ?? ((name, network) => new Worker(workerScriptUrl(workerUrl(network)), { type: "module", name }) as unknown as WorkerLike);
   }
 
   // ---- Lifecycle ---------------------------------------------------------------

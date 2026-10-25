@@ -5,12 +5,14 @@ import { createConfiguredModels, listModels } from "./agent/models";
 import { hasNativeWebSearch } from "./tools";
 import { McpClient } from "./tools/mcp";
 import { mergeHeaders } from "./tools/secrets";
+import { parseReports, readLimited } from "./observability/ingest";
 
 export { AgentSession } from "./agent/session";
 export { SiteIndex } from "./agent/site-index";
 export { SiteSession } from "./agent/site-session";
 export { ToolStore } from "./tools/store";
 export { ExtensionStore } from "./extension-store";
+export { Observability } from "./observability/store";
 
 // The editor runs in the browser against local folders. The Worker serves the
 // built app and the agent API: one AgentSession Durable Object per post
@@ -24,16 +26,38 @@ export default {
     // Preflights carry no Authorization header, so answer them before checking the token.
     if (request.method === "OPTIONS") return new Response(null, { status: cors ? 204 : 403, headers: cors });
     const response = await route(request, url, env);
-    if (!cors || response.webSocket) return response;
-    const withCors = new Response(response.body, response);
-    for (const [k, v] of Object.entries(cors)) withCors.headers.set(k, v);
-    return withCors;
+    if (response.webSocket) return response;
+    const withHeaders = new Response(response.body, response);
+    for (const [k, v] of Object.entries({ ...API_HEADERS, ...cors })) withHeaders.headers.set(k, v);
+    return withHeaders;
   },
 } satisfies ExportedHandler<Env>;
 
+/** API responses are data, never documents: nothing in them may run or be framed. */
+const API_HEADERS = {
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+};
+
 async function route(request: Request, url: URL, env: Env): Promise<Response> {
-    if (url.pathname === "/api/health") return Response.json({ ok: true });
+    // Unauthenticated: the page compares `commit` with its own build to spot a new deploy,
+    // and KILL_SW=1 tells installed copies to drop their service worker and caches.
+    if (url.pathname === "/api/health") {
+      return Response.json({ ok: true, commit: env.COMMIT ?? "dev", killSw: env.KILL_SW === "1" }, { headers: { "Cache-Control": "no-store" } });
+    }
+    // Unauthenticated too: browsers send CSP and Reporting API reports without credentials.
+    if (url.pathname === "/api/reports" && request.method === "POST") return collectReports(request, env);
     if (!authorised(request, url, env)) return Response.json({ error: "Unauthorised" }, { status: 401 });
+
+    if (url.pathname === "/api/observability/summary" && request.method === "GET") {
+      return Response.json(await observability(env).summary());
+    }
+    if (url.pathname === "/api/observability/errors" && request.method === "GET") {
+      const since = Number(url.searchParams.get("since") ?? 0) || 0;
+      const limit = Number(url.searchParams.get("limit") ?? 100) || 100;
+      return Response.json(await observability(env).errors(since, limit));
+    }
 
     if (url.pathname === "/api/config" && request.method === "GET") {
       const models = createConfiguredModels(env);
@@ -116,6 +140,22 @@ async function route(request: Request, url: URL, env: Env): Promise<Response> {
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
+}
+
+function observability(env: Env) {
+  return env.OBSERVABILITY.get(env.OBSERVABILITY.idFromName("global"));
+}
+
+/** POST /api/reports: CSP reports, Reporting API batches and the page's own error and Web Vitals beacons. */
+async function collectReports(request: Request, env: Env): Promise<Response> {
+  const text = await readLimited(request);
+  if (text === null) return Response.json({ error: "Too large" }, { status: 413 });
+  const events = parseReports(text, request.headers.get("Content-Type") ?? "");
+  if (events.length) {
+    const client = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    await observability(env).record(events, client, env.COMMIT ?? "dev");
+  }
+  return new Response(null, { status: 204 });
 }
 
 /**
