@@ -1,9 +1,9 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
-import { skillTitle, type Skill } from "../shared/skills";
-import { originLabel } from "../lib/skill-install";
-import { controls, lightDismiss } from "./shared";
-import { icon } from "./icons";
+import { skillTitle, type Skill } from "../../shared/skills";
+import { originLabel } from "../../lib/skill-install";
+import { controls, lightDismiss } from "../../components/shared";
+import { icon } from "../../components/icons";
 
 export type InstallTarget = "site" | "browser";
 

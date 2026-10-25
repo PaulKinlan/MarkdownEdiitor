@@ -34,4 +34,23 @@ describe("module contributions", () => {
     ctx.addCommands(() => [{ id: "x", title: "X", run: () => {} }]);
     expect(c.commands().map((cmd) => cmd.id)).toEqual(["x"]);
   });
+
+  it("keeps one status item per module, and the last provider of a service", () => {
+    const c = new Contributions();
+    const a = c.context(shell);
+    const b = c.context(shell);
+    a.setStatus("Indexing…");
+    b.setStatus("Synced");
+    expect([...c.statuses.values()]).toEqual(["Indexing…", "Synced"]);
+    a.setStatus("");
+    expect([...c.statuses.values()]).toEqual(["Synced"]);
+    const first = () => "first";
+    const removeFirst = a.provide("prompt", first);
+    const removeSecond = b.provide("prompt", () => "second");
+    expect(c.services.prompt?.("x", "y")).toBe("second");
+    removeFirst();
+    expect(c.services.prompt?.("x", "y")).toBe("second");
+    removeSecond();
+    expect(c.services.prompt).toBeUndefined();
+  });
 });

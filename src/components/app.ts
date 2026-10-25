@@ -8,33 +8,22 @@ import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise
 import { isNotePath, NOTES_DIR } from "../shared/notes";
 import { findExistingSite, hasPermission, loadSites, requestPermission, saveSites, type SiteRecord } from "../lib/sites";
 import { createSampleSite } from "../lib/sample-site";
-import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentLink, type AgentSettings } from "../lib/agent-client";
-import { syncSiteIndex } from "../lib/indexer";
-import { BUILTIN_ACTIONS, loadCustomActions, type ActionScope } from "../lib/actions";
-import { canSummarize, isOnDevice, OnDeviceConnection, onDeviceModels, summarizePost } from "../lib/on-device";
+import { canSummarize, summarizePost } from "../lib/on-device";
 import { watchFolder, type FolderChanges } from "../lib/file-watcher";
 import { listenForLaunches, persistStorage, registerServiceWorker, type Launch } from "../lib/pwa";
-import type { Edit, ModelInfo, PostContext, SiteContext } from "../shared/protocol";
+import type { Edit } from "../shared/protocol";
 import { controls, lightDismiss } from "./shared";
 import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
-import { BUILTIN_SKILLS } from "../shared/builtin-skills";
-import { mergeSkills, type Skill } from "../shared/skills";
-import { installSiteSkill, loadSiteSkills, removeSiteSkill } from "../lib/site-skills";
-import { fetchSkillsFromGitHub, loadInstalledSkills, refreshSkill, saveInstalledSkills } from "../lib/skill-install";
-import type { SkillManager } from "./skills-dialog";
 import { ExtensionController } from "../extensions/controller";
 import type { PostSnapshot } from "../extensions/types";
-import type { EditAction } from "../lib/actions";
 import type { MdEditor, BodyAnnotation } from "./md-editor";
 import type { ExtensionsDialog } from "./extensions-dialog";
 import "./md-editor";
 import "./frontmatter-form";
-import "./agent-panel";
 import type { CommandPalette, PaletteCommand } from "./command-palette";
 import { keyLabel } from "../lib/keys";
-import type { ToolsSettings } from "./tools-settings";
-import { Contributions, type SettingsSection, type Shell } from "../core/modules";
+import { Contributions, type Services, type SettingsSection, type Shell, type SideTab } from "../core/modules";
 import { activateModules } from "../core/load-modules";
 
 interface OpenPost {
@@ -48,8 +37,6 @@ interface OpenPost {
 const LAST_SITE_KEY = "md-editor:last-site";
 const PREVIEW_KEY = "md-editor:preview-open";
 const TAB_KEY = "md-editor:side-tab";
-const SCOPE_KEY = "md-editor:assistant-scope";
-const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
 /** Below this width the app shows one pane at a time, switched from a bottom bar. */
 const NARROW = matchMedia("(max-width: 900px)");
 /** "posts", "write", or a side tab shown on the bottom bar. */
@@ -207,14 +194,6 @@ export class MdApp extends LitElement {
   @state() private theme: Theme = getTheme();
   @state() private narrow = NARROW.matches;
   @state() private mobileView: MobileView = "posts";
-  @state() private agentSettings: AgentSettings = loadAgentSettings();
-  @state() private models: ModelInfo[] = [];
-  @state() private agentError = "";
-  @state() private connection?: AgentLink;
-  /** The site-wide assistant for the current site; opened when first shown. */
-  @state() private siteConnection?: AgentConnection;
-  @state() private assistantScope: ActionScope = localStorage.getItem(SCOPE_KEY) === "site" ? "site" : "post";
-  @state() private indexStatus = "";
   /** Set when a new version of the app is installed and waiting; calling it switches and reloads. */
   @state() private applyUpdate?: () => void;
   /** A file the app was opened with that isn't inside any added site. */
@@ -223,25 +202,16 @@ export class MdApp extends LitElement {
   @state() private shared?: { title: string; text: string };
   /** A launch to act on once the site it needs has loaded. */
   private pendingLaunch?: { siteId?: string; path?: string; share?: Launch["share"]; action?: string };
-  private siteInstructions = "";
-  /** Skills from the site folder (.agents/skills, .claude/skills), sent to the assistant with the post. */
-  @state() private siteSkills: Skill[] = [];
-  /** Skills installed from GitHub for every site, kept in this browser. */
-  @state() private installedSkills: Skill[] = [];
   private stopWatching?: () => void;
   private deactivateModules?: () => void;
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
   private writing = 0;
-  @state() private agentServerUp = false;
-  /** The agent server has a key for web_search (DeepSeek, Brave or Tavily). */
-  @state() private serverWebSearch = false;
 
   @query("md-editor") private editor?: MdEditor;
   @query("#new-post") private newPostDialog?: HTMLDialogElement;
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
   @query("extensions-dialog") private extensionsDialog?: ExtensionsDialog;
   @query("command-palette") private palette?: CommandPalette;
-  @query("tools-settings") private toolsSettings?: ToolsSettings;
 
   // These dialogs are loaded on first use, to keep them out of the boot bundle.
   private async showExtensions() {
@@ -254,12 +224,6 @@ export class MdApp extends LitElement {
     await import("./command-palette");
     await this.updateComplete;
     this.palette?.open();
-  }
-
-  private async showToolsSettings() {
-    await import("./tools-settings");
-    await this.updateComplete;
-    this.toolsSettings?.show();
   }
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
@@ -307,14 +271,11 @@ export class MdApp extends LitElement {
         categories: terms(p.frontMatter.categories),
       })),
     prompt: (text, label) => {
-      const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
-      if (!this.connection || !provider || !rest.length) throw new Error("The assistant isn't ready: open a post and pick a model.");
-      this.connection.prompt(text, { provider, modelId: rest.join("/") }, label);
-      if (!this.showPreview) this.togglePreview();
-      this.setSideTab("assistant");
+      const problem = this.shell.prompt(text, label);
+      if (problem) throw new Error(problem);
     },
     notify: (message, level) => (level === "error" ? (this.error = message) : this.flash(message)),
-    server: () => (this.agentServerUp ? this.agentSettings : undefined),
+    server: () => this.contributions.services.agentServer?.(),
   });
 
   get dirty(): boolean {
@@ -334,7 +295,6 @@ export class MdApp extends LitElement {
     void this.extensions.load();
     watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
-    void loadInstalledSkills().then((skills) => (this.installedSkills = skills));
     this.sites = await loadSites();
     listenForLaunches((launch) => void this.onLaunch(launch));
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
@@ -354,16 +314,7 @@ export class MdApp extends LitElement {
     this.extensions.dispose();
   }
 
-  private onExtensionsChange = () => {
-    this.extensionsVersion++;
-    // Extension skills go with the other skills; send them again only when they change.
-    const skills = JSON.stringify(this.extensions.host.skills);
-    if (skills === this.sentSkills) return;
-    this.sentSkills = skills;
-    this.connection?.updateSkills(this.extraSkills());
-    this.siteConnection?.updateSkills(this.extraSkills());
-  };
-  private sentSkills = "[]";
+  private onExtensionsChange = () => this.extensionsVersion++;
   private onNarrowChange = () => (this.narrow = NARROW.matches);
 
   private onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -426,7 +377,6 @@ export class MdApp extends LitElement {
     }
     const openPath = this.open?.summary.path;
     if (rescan || (openPath && [...changes.paths].some((p) => openPath === p || openPath.startsWith(`${p}/`)))) await this.checkOpenPost();
-    if (this.agentServerUp && (rescan || [...changes.paths].some((p) => p.startsWith(config.contentDir) || isNotePath(p)))) void this.syncIndex();
   }
 
   /** Re-reads the given content files, adding, updating or dropping them in the post list. */
@@ -498,9 +448,6 @@ export class MdApp extends LitElement {
     this.stopWatching?.();
     this.stopWatching = undefined;
     this.sectionFilter = "*";
-    this.connection?.close();
-    this.connection = undefined;
-    this.closeSiteConnection();
     this.text = "";
     this.posts = [];
     this.notes = [];
@@ -532,13 +479,8 @@ export class MdApp extends LitElement {
       this.posts = posts;
       this.notes = notes;
       this.shortcodes = shortcodes;
-      const [rules, skills] = await Promise.all([Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f))), loadSiteSkills(site.handle)]);
-      if (generation !== this.siteGeneration) return;
-      this.siteInstructions = rules.filter(Boolean).join("\n\n");
-      this.siteSkills = skills;
       void this.watch(site);
       void this.extensions.load({ id: site.id, handle: site.handle });
-      void this.connectAgentServer();
     } catch (e) {
       if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -626,7 +568,6 @@ export class MdApp extends LitElement {
     this.settingsDialog?.close();
     this.stopWatching?.();
     this.stopWatching = undefined;
-    this.closeSiteConnection();
     this.site = undefined;
     this.open = undefined;
     this.text = "";
@@ -662,7 +603,6 @@ export class MdApp extends LitElement {
       this.open = { summary, post, savedText: text, lastModified: file.lastModified };
       this.loadCount++;
       this.text = text;
-      if (switching || !this.connection) this.openConnection();
       this.extensions.postOpened();
       if (switching) this.mobileView = "write";
       this.changedOnDisk = false;
@@ -723,10 +663,7 @@ export class MdApp extends LitElement {
         this.writing--;
       }
       const updated = summarise(path, config, Post.parse(text), file.lastModified);
-      if (site === this.site) {
-        this.replaceSummary(updated);
-        void this.syncIndex();
-      }
+      if (site === this.site) this.replaceSummary(updated);
       if (this.open?.summary.path !== path || site !== this.site) return;
       // Only what was written counts as saved; edits made during the write stay unsaved.
       open.savedText = text;
@@ -765,7 +702,6 @@ export class MdApp extends LitElement {
     const summary = summarise(path, this.config, post, file.lastModified);
     if (note) this.notes = sortPosts([summary, ...this.notes]);
     else this.posts = sortPosts([summary, ...this.posts]);
-    void this.syncIndex();
     this.newPostDialog?.close();
     await this.openPost(summary, true);
     this.flash(`Created ${path}`);
@@ -800,197 +736,7 @@ export class MdApp extends LitElement {
     }
   };
 
-  // ---- Assistant -------------------------------------------------------------
-
-  /** Loads the model list and brings the site's search index up to date. */
-  private async connectAgentServer() {
-    const local = await onDeviceModels();
-    let server: ModelInfo[] = [];
-    let failed = "";
-    try {
-      const config = await fetchAgentConfig(this.agentSettings);
-      server = config.models;
-      this.serverWebSearch = config.webSearch;
-    } catch (e) {
-      failed = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
-    }
-    this.agentServerUp = !failed;
-    this.models = [...server, ...local];
-    this.agentError = this.models.length ? "" : failed || "The agent server has no model API keys configured.";
-    if (failed && local.length) this.indexStatus = `${failed}. The on-device model still works.`;
-    const saved = this.agentSettings.model;
-    if (!saved || !this.models.some((m) => `${m.provider}/${m.modelId}` === saved)) {
-      const first = server.find((m) => m.provider === "anthropic") ?? this.models[0];
-      if (first) this.setModel(`${first.provider}/${first.modelId}`);
-    }
-    if (failed) return;
-    void this.extensions.sync();
-    this.indexStatus = "Indexing posts for search…";
-    await this.syncIndex();
-  }
-
-  private indexing: Promise<void> = Promise.resolve();
-
-  /** Brings the site's search index up to date. Serialised, so saves in quick succession queue rather than race. */
-  private syncIndex(): Promise<void> {
-    this.indexing = this.indexing.then(async () => {
-      const { site, posts, notes } = this;
-      if (!site) return;
-      try {
-        const uploaded = await syncSiteIndex(this.agentSettings, site.id, site.handle, [...posts, ...notes]);
-        this.indexStatus = uploaded > 1 ? `Indexed ${uploaded} posts` : "";
-        if (uploaded > 1) setTimeout(() => (this.indexStatus = ""), 4000);
-      } catch (e) {
-        this.indexStatus = `Search index not updated: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    });
-    return this.indexing;
-  }
-
-  private setModel(model: string) {
-    const switching = isOnDevice(model) !== isOnDevice(this.agentSettings.model);
-    this.agentSettings = { ...this.agentSettings, model };
-    saveAgentSettings(this.agentSettings);
-    // The on-device model has its own conversation, separate from the server's.
-    if (switching && this.connection) this.openConnection();
-  }
-
-  private updateAgentSettings(patch: Partial<AgentSettings>) {
-    this.agentSettings = { ...this.agentSettings, ...patch };
-    saveAgentSettings(this.agentSettings);
-    this.openConnection();
-    this.closeSiteConnection();
-    void this.connectAgentServer();
-  }
-
-  private openConnection() {
-    this.connection?.close();
-    this.connection = undefined;
-    if (!this.open || !this.site) return;
-    const id = sessionId(this.site.id, this.open.summary.path);
-    this.connection = isOnDevice(this.agentSettings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.agentSettings, id);
-    this.extensions.watch(this.connection);
-    this.connection.updatePost(this.postContext()!);
-    this.connection.updateSkills(this.extraSkills());
-  }
-
-  /** Skills beyond the built-in ones: extensions', then installed, then the site's own, each replacing an earlier one with the same name. */
-  private extraSkills(): Skill[] {
-    return mergeSkills(this.extensions.host.skills, this.installedSkills, this.siteSkills);
-  }
-
-  private skillManager(): SkillManager {
-    const site = this.site;
-    return {
-      hasSite: !!site && !this.needsPermission,
-      install: async (source, target) => {
-        const { skills } = await fetchSkillsFromGitHub(source);
-        if (target === "site") {
-          if (!site) throw new Error("Open a site first.");
-          for (const { skill, markdown } of skills) await installSiteSkill(site.handle, skill, markdown);
-          await this.reloadSiteSkills();
-        } else {
-          await this.saveInstalled(mergeSkills(this.installedSkills, skills.map((d) => ({ ...d.skill, source: "installed" }))));
-        }
-        return skills.map((d) => d.skill.name);
-      },
-      update: async (skill) => {
-        const { skill: fresh, markdown } = await refreshSkill(skill);
-        if (skill.source === "site" && site) {
-          await installSiteSkill(site.handle, fresh, markdown, skill.folder);
-          await this.reloadSiteSkills();
-        } else {
-          await this.saveInstalled(this.installedSkills.map((s) => (s.name === skill.name ? { ...fresh, source: "installed" } : s)));
-        }
-      },
-      remove: async (skill) => {
-        if (skill.source === "site" && site && skill.folder) {
-          await removeSiteSkill(site.handle, skill.folder);
-          await this.reloadSiteSkills();
-        } else {
-          await this.saveInstalled(this.installedSkills.filter((s) => s.name !== skill.name));
-        }
-      },
-    };
-  }
-
-  private async saveInstalled(skills: Skill[]) {
-    await saveInstalledSkills(skills);
-    this.installedSkills = skills;
-  }
-
-  private async reloadSiteSkills() {
-    const site = this.site;
-    const generation = this.siteGeneration;
-    if (!site) return;
-    const skills = await loadSiteSkills(site.handle);
-    // Dropped if another site was opened (or this one reloaded) meanwhile.
-    if (this.site === site && generation === this.siteGeneration) this.siteSkills = skills;
-  }
-
-  /** The site assistant is shown with no post open, or when picked in the panel. */
-  private get scope(): ActionScope {
-    return this.open ? this.assistantScope : "site";
-  }
-
-  private setScope(scope: ActionScope) {
-    this.assistantScope = scope;
-    localStorage.setItem(SCOPE_KEY, scope);
-  }
-
-  private closeSiteConnection() {
-    this.extensions.detach(this.siteConnection);
-    this.siteConnection?.close();
-    this.siteConnection = undefined;
-  }
-
-  /** Opens the site assistant's connection the first time it's needed for this site. */
-  private ensureSiteConnection(): AgentConnection | undefined {
-    const context = this.siteContext();
-    if (!context) return undefined;
-    if (!this.siteConnection) {
-      this.siteConnection = AgentConnection.forSite(this.agentSettings, context.siteId);
-      this.extensions.attach(this.siteConnection);
-    }
-    return this.siteConnection;
-  }
-
-  private siteContext(): SiteContext | undefined {
-    if (!this.site || !this.config || this.needsPermission) return undefined;
-    return {
-      siteId: this.site.id,
-      siteName: this.site.name,
-      siteInstructions: this.siteInstructions,
-      contentDir: this.config.contentDir,
-      sections: sections(this.posts),
-      ...(this.open ? { openPath: this.open.summary.path } : {}),
-    };
-  }
-
-  /** The site assistant only runs on the agent server: it needs the site index. */
-  private get siteModels(): ModelInfo[] {
-    return this.models.filter((m) => !isOnDevice(`${m.provider}/${m.modelId}`));
-  }
-
-  private get siteModel(): string {
-    const saved = this.agentSettings.model ?? "";
-    if (saved && !isOnDevice(saved)) return saved;
-    const first = this.siteModels[0];
-    return first ? `${first.provider}/${first.modelId}` : "";
-  }
-
-  private postContext(): PostContext | undefined {
-    if (!this.open || !this.site) return undefined;
-    return {
-      siteId: this.site.id,
-      siteName: this.site.name,
-      siteInstructions: this.siteInstructions,
-      path: this.open.summary.path,
-      url: this.open.summary.url,
-      text: this.text,
-      shortcodes: this.shortcodes,
-    };
-  }
+  // ---- Extensions and edits ---------------------------------------------------
 
   /** The open post as extensions see it. Offsets are into the whole file. */
   private extensionSnapshot(): PostSnapshot | undefined {
@@ -1016,74 +762,6 @@ export class MdApp extends LitElement {
     return this.extensions.host.annotations
       .filter((a) => a.from >= bodyStart)
       .map((a) => ({ ...a, from: a.from - bodyStart, to: a.to - bodyStart }));
-  }
-
-  private onApplyEdit(e: CustomEvent<{ edit: Edit; done: (ok: boolean) => void }>) {
-    e.detail.done(this.applyEdit(e.detail.edit));
-  }
-
-  private fileWrites: Promise<unknown> = Promise.resolve();
-
-  /**
-   * Applies a change the site assistant proposed. Edits to the open post go
-   * through the editor (unsaved, undoable) like the post assistant's; other
-   * files are written straight to disk. Writes run one at a time, so
-   * accepting a batch of edits to one file applies them in turn.
-   */
-  private onApplyFileChange(e: CustomEvent<{ path: string; edit?: Edit; create?: string; done: (ok: boolean) => void }>) {
-    const { path, edit, create, done } = e.detail;
-    // Pinned to the site it was proposed for: a queued write must not land in a site switched to meanwhile.
-    const site = this.site;
-    const run = this.fileWrites.then(() => this.applyFileChange(site, path, edit, create));
-    this.fileWrites = run.catch(() => undefined);
-    run.then(done, (err) => {
-      this.error = `Couldn't change ${path}: ${err instanceof Error ? err.message : String(err)}`;
-      done(false);
-    });
-  }
-
-  private async applyFileChange(site: SiteRecord | undefined, path: string, edit: Edit | undefined, create: string | undefined): Promise<boolean> {
-    const { config } = this;
-    if (!site || site !== this.site || !config) return false;
-    if (create === undefined && path === this.open?.summary.path) return edit ? this.applyEdit(edit) : false;
-    let next: string;
-    if (create !== undefined) {
-      if (await exists(site.handle, path)) return false;
-      next = create;
-    } else {
-      const current = await readText(site.handle, path);
-      if (current === undefined || !edit) return false;
-      const at = current.indexOf(edit.find);
-      if (at === -1 || current.indexOf(edit.find, at + 1) !== -1) return false;
-      next = current.slice(0, at) + edit.replace + current.slice(at + edit.find.length);
-    }
-    if (site !== this.site) return false;
-    this.writing++;
-    try {
-      await writeFile(site.handle, path, next);
-    } finally {
-      this.writing--;
-    }
-    if (site !== this.site) return true;
-    if (path.startsWith(`${config.contentDir}/`)) await this.refreshPosts(site, config, [path]);
-    else if (isNotePath(path)) this.notes = await listNotes(site.handle, config);
-    this.scheduleIndexSync();
-    this.flash(create !== undefined ? `Created ${path}` : `Updated ${path}`);
-    return true;
-  }
-
-  private indexTimer?: ReturnType<typeof setTimeout>;
-
-  /** One index sync after a burst of writes, rather than one per accepted edit. */
-  private scheduleIndexSync() {
-    clearTimeout(this.indexTimer);
-    this.indexTimer = setTimeout(() => this.agentServerUp && void this.syncIndex(), 800);
-  }
-
-  private async onOpenPath(e: CustomEvent<string>) {
-    const summary = [...this.posts, ...this.notes].find((p) => p.path === e.detail);
-    if (summary) await this.openPost(summary);
-    else this.error = `${e.detail} isn't in the post or note list.`;
   }
 
   /** Applies a find/replace edit. Body edits go through the editor so they can be undone. */
@@ -1160,6 +838,10 @@ export class MdApp extends LitElement {
       get narrow() {
         return app.narrow;
       },
+      get sideTab() {
+        return app.shownSideTab;
+      },
+      extensions: app.extensions,
       flash: (message: string) => app.flash(message),
       fail: (message: string) => void (app.error = message),
       save: () => app.save(),
@@ -1176,18 +858,22 @@ export class MdApp extends LitElement {
       },
       applyEdit: (edit: Edit) => app.applyEdit(edit),
       updateSite: (patch: Partial<SiteRecord>) => app.updateSite(patch),
+      writeSiteFile: (path: string, text: string) => app.writeSiteFile(path, text),
       showSideTab: (id: string) => {
         if (!app.showPreview) app.togglePreview();
         app.setSideTab(id);
       },
-      prompt: (text: string, label: string) => app.startRun(text, label),
+      prompt: (text: string, label: string) => {
+        const prompt = app.contributions.services.prompt;
+        return prompt ? prompt(text, label) : "There's no assistant.";
+      },
+      service: <K extends keyof Services>(key: K) => app.contributions.services[key],
       update: () => app.requestUpdate(),
     }))(this);
 
-  /** The app's own side tab and settings sections, added the way modules add theirs. */
+  /** The app's own settings sections, added the way modules add theirs. */
   private addCoreContributions() {
-    const { addSideTab, addSettingsSection } = this.contributions.context(this.shell);
-    addSideTab({ id: "assistant", title: "Assistant", order: 20, icon: "sparkles", render: () => this.renderAssistant() });
+    const { addSettingsSection } = this.contributions.context(this.shell);
     for (const section of this.coreSettings()) addSettingsSection(section);
   }
 
@@ -1198,18 +884,31 @@ export class MdApp extends LitElement {
   }
 
   updated(changed: Map<string, unknown>) {
-    if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
     if (changed.has("text") && this.open && changed.get("text") !== undefined) this.extensions.postChanged();
-    if ((changed.has("siteSkills") || changed.has("installedSkills")) && this.connection) this.connection.updateSkills(this.extraSkills());
-    // Opened lazily, the first time the site assistant is on screen.
-    const assistantShown = this.narrow ? this.mobileView === "assistant" : this.showPreview && this.effectiveTab === "assistant";
-    if (assistantShown && this.scope === "site" && this.agentServerUp) this.ensureSiteConnection();
-    if (this.siteConnection && (changed.has("siteSkills") || changed.has("installedSkills") || changed.has("siteConnection"))) this.siteConnection.updateSkills(this.extraSkills());
-    if (this.siteConnection && ["posts", "open", "site", "config", "siteConnection"].some((k) => changed.has(k))) {
-      const context = this.siteContext();
-      if (context) this.siteConnection.updateSite(context);
+    // Sent after every render, even one a module asked for with no app state changed, so modules can react to each other.
+    this.shell.dispatchEvent(new CustomEvent("change", { detail: new Set(changed.keys()) }));
+  }
+
+  /** The side tab on screen, if any. */
+  private get shownSideTab(): string | undefined {
+    if (!this.site || this.needsPermission) return undefined;
+    if (this.narrow) return this.mobileView === "posts" || this.mobileView === "write" ? undefined : this.mobileView;
+    return this.showPreview ? this.effectiveTab : undefined;
+  }
+
+  /** Writes a file in the site that isn't the open post (an accepted site assistant change, say), then refreshes the lists. */
+  private async writeSiteFile(path: string, text: string) {
+    const { site, config } = this;
+    if (!site || !config) throw new Error("No site is open.");
+    this.writing++;
+    try {
+      await writeFile(site.handle, path, text);
+    } finally {
+      this.writing--;
     }
-    if (changed.size) this.shell.dispatchEvent(new CustomEvent("change", { detail: new Set(changed.keys()) }));
+    if (site !== this.site) return;
+    if (path.startsWith(`${config.contentDir}/`)) await this.refreshPosts(site, config, [path]);
+    else if (isNotePath(path)) this.notes = await listNotes(site.handle, config);
   }
 
   // ---- Rendering -------------------------------------------------------------
@@ -1404,15 +1103,6 @@ export class MdApp extends LitElement {
           </p>`,
       },
       {
-        id: "assistant",
-        order: 70,
-        render: () => html`<h4>Assistant</h4>
-          <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
-          <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
-          <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.showToolsSettings()}>Tools and MCP servers…</button></div>
-          <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>`,
-      },
-      {
         id: "folder",
         order: 90,
         render: () =>
@@ -1467,7 +1157,6 @@ export class MdApp extends LitElement {
       </dialog>
       <extensions-dialog .controller=${this.extensions}></extensions-dialog>
       <command-palette .commands=${this.paletteCommands()}></command-palette>
-      <tools-settings .agentSettings=${this.agentSettings} ?webSearch=${this.serverWebSearch}></tools-settings>
       ${this.contributions.dialogs.map((render) => render())}
     `;
   }
@@ -1483,7 +1172,7 @@ export class MdApp extends LitElement {
       : nothing}`;
   }
 
-  /** Everything the command palette lists: editor actions, extension commands, and the assistant's quick edits. */
+  /** Everything the command palette lists: editor actions, modules' commands (the assistant's quick edits among them) and extension commands. */
   private paletteCommands(): PaletteCommand[] {
     const out: PaletteCommand[] = [];
     if (this.open) out.push({ id: "save", title: "Save", key: "Mod-s", run: () => void this.save() });
@@ -1493,34 +1182,15 @@ export class MdApp extends LitElement {
     for (const c of this.extensions.host.commands) {
       out.push({ id: `${c.extension}:${c.spec.id}`, title: c.spec.title, detail: c.name, key: c.spec.key, run: () => void this.extensions.host.runCommand(c.extension, c.spec.id) });
     }
-    if (this.open) {
-      const edits = [...postActions(), ...this.extensions.host.quickEdits.map((e) => ({ name: e.spec.name, prompt: e.spec.prompt }))];
-      for (const a of edits) out.push({ id: `edit:${a.name}`, title: `Assistant: ${a.name}`, run: () => this.runPrompt(a.prompt, a.name) });
-    }
     return out;
   }
 
-  /** Starts a post assistant run, as a quick edit button does. */
-  private runPrompt(text: string, label: string) {
-    const problem = this.startRun(text, label);
-    if (problem) this.error = problem;
-  }
-
-  /** Starts a post assistant run and shows it; returns why it couldn't. */
-  private startRun(text: string, label: string): string | undefined {
-    const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
-    if (!this.connection || !provider || !rest.length) return "The assistant isn't ready: open a post and pick a model.";
-    this.connection.prompt(text, { provider, modelId: rest.join("/") }, label);
-    if (!this.showPreview) this.togglePreview();
-    this.setSideTab("assistant");
-    return undefined;
-  }
-
-  /** The chosen side tab, or the assistant when that tab can't show now (the preview with no post, say). */
+  /** The chosen side tab, or the first that can show when it can't (the preview with no post, say). */
   private get effectiveTab(): string {
     if (this.sideTab.startsWith("ext:")) return this.sideTab;
+    const available = (t: SideTab) => t.available?.() ?? true;
     const tab = this.contributions.sideTabs.find((t) => t.id === this.sideTab);
-    return tab && (tab.available?.() ?? true) ? tab.id : "assistant";
+    return tab && available(tab) ? tab.id : (this.contributions.sideTabs.find(available)?.id ?? "");
   }
 
   private renderSide(id = this.effectiveTab) {
@@ -1537,29 +1207,6 @@ export class MdApp extends LitElement {
       </div></div>`}
       ${id.startsWith("ext:") ? this.renderExtensionPanel(id) : tab ? tab.render() : nothing}
     </section>`;
-  }
-
-  /** The Assistant tab: the post's conversation, or the site's. */
-  private renderAssistant() {
-    const site = this.scope === "site";
-    return html`<agent-panel
-      .connection=${site ? this.siteConnection : this.connection}
-      .models=${site ? this.siteModels : this.models}
-      .model=${site ? this.siteModel : (this.agentSettings.model ?? "")}
-      .configError=${site && !this.agentServerUp && !this.agentError ? "The site assistant needs the agent server (Assistant settings)." : this.agentError}
-      .scope=${this.scope}
-      .hasPost=${!!this.open}
-      @scope-change=${(e: CustomEvent<ActionScope>) => this.setScope(e.detail)}
-      .skills=${mergeSkills(BUILTIN_SKILLS, this.extraSkills())}
-      .skillManager=${this.skillManager()}
-      @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
-      @apply-edit=${this.onApplyEdit}
-      .extensionActions=${this.extensions.host.quickEdits.map(
-        (e): EditAction => ({ id: `${e.extension}:${e.spec.id}`, name: e.spec.name, prompt: e.spec.prompt }),
-      )}
-      @apply-file-change=${this.onApplyFileChange}
-      @open-path=${this.onOpenPath}
-    ></agent-panel>`;
   }
 
   /** An extension's panel: its page in a sandboxed iframe (scripts, but no same-origin access). */
@@ -1597,7 +1244,7 @@ export class MdApp extends LitElement {
       ${this.open ? html`<span class=${this.dirty ? "dirty" : ""}><span class="dot"></span>${this.dirty ? "Unsaved changes" : "Saved"}</span>` : nothing}
       ${this.error ? html`<span class="error">${this.error}</span>` : nothing}
       ${this.message ? html`<span>${this.message}</span>` : nothing}
-      ${this.indexStatus ? html`<span>${this.indexStatus}</span>` : nothing}
+      ${[...this.contributions.statuses.values()].map((text) => html`<span>${text}</span>`)}
 
       ${statuses.map((s, i) => html`<span class=${i === 0 ? "end" : ""} title=${s.spec.title ?? s.name}>${s.spec.text}</span>`)}
     </div>`;
@@ -1674,11 +1321,6 @@ function focusedFrontMatterField(): HTMLInputElement | HTMLTextAreaElement | und
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
   const host = el?.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot).host : undefined;
   return host?.localName === "frontmatter-form" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) ? el : undefined;
-}
-
-/** Edits that run on the open post (WebMCP tools only drive the post assistant). */
-function postActions() {
-  return [...BUILTIN_ACTIONS, ...loadCustomActions().filter((a) => (a.scope ?? "post") === "post")];
 }
 
 /** Like Object.assign, but copies getters as getters (Object.assign would read them once). */

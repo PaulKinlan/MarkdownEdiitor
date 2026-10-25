@@ -21,6 +21,7 @@ A feature should be a folder or a file, not an edit to a shared list:
 - a built-in skill: `src/skills/<name>/SKILL.md`
 - a built-in quick edit: `src/quick-edits/<id>.md`
 - a built-in extension: `src/extensions/builtin/<id>.js`
+- a feature that runs in the page (side tab, settings, dialog, commands, services): `src/modules/<id>/module.ts` (see [docs/modules.md](docs/modules.md))
 - an `/api` endpoint: `worker/routes/<area>.ts`
 - a kind of assistant: `worker/agent/profiles/<kind>.ts`
 - its documentation: `docs/features/<name>.md`, linked from the table above
@@ -47,7 +48,10 @@ src/lib/hugo.ts          Hugo config, permalinks, shortcode discovery
 src/lib/posts.ts         Post index and new-post templates
 src/lib/fs.ts            File System Access helpers
 src/lib/sites.ts         Persisted directory handles and permissions
-src/components/          Lit elements: app shell, editor, front matter form, preview
+src/components/          Lit elements: app shell, editor, front matter form, command palette
+src/core/modules.ts      The module API: Shell, ModuleContext, Services, Contributions
+src/modules/<id>/        One first-party module each: hugo-preview, spelling, images, webmcp, assistant
+src/modules/assistant/   The assistant: agent panel, skills and tools dialogs, connections, search index
 src/lib/agent-client.ts  WebSocket client for agent sessions, settings
 src/lib/actions.ts       Quick edits: the built-in ones (src/quick-edits/) and the author's own
 src/quick-edits/<id>.md  One built-in quick edit each (front matter: name, scope, order)
