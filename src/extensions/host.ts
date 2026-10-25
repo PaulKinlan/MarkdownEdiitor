@@ -181,7 +181,10 @@ export class ExtensionHost extends EventTarget {
         if (message.type === "loaded") {
           clearTimeout(timer);
           if (message.error) this.fail(ext, message.error);
-          else ext.status = "running";
+          else {
+            ext.status = "running";
+            this.catchUp(ext, post);
+          }
           this.changed();
           resolve();
         } else {
@@ -198,6 +201,15 @@ export class ExtensionHost extends EventTarget {
     const post = this.granted(ext, "post:read") ? (this.bridge.post() ?? null) : null;
     this.post(ext, { type: "load", manifest, source: record.source, post });
     return ext.loaded;
+  }
+
+  /** Post events skip an extension while it starts; once it runs, it hears about any post that changed meanwhile. */
+  private catchUp(ext: Running, sent: PostSnapshot | null) {
+    if (!this.granted(ext, "post:read")) return;
+    const now = this.bridge.post() ?? null;
+    if (now?.path === sent?.path && now?.text === sent?.text) return;
+    const name: EditorEvent = !now ? "post:close" : now.path !== sent?.path ? "post:open" : "post:change";
+    this.post(ext, { type: "event", name, data: now });
   }
 
   /** A crashed or broken extension is stopped and loses its contributions; the others keep running. */

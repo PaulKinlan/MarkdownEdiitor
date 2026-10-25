@@ -73,6 +73,26 @@ describe("manifest parsing", () => {
 });
 
 describe("extension host", () => {
+  it("tells an extension about post changes made while it was starting", async () => {
+    const b = bridge(snapshot("---\ntitle: a\n---\n\nOne.\n"));
+    const host = new ExtensionHost(b, { createWorker: fakeWorker, storage: memory() });
+    const source = `
+      export const manifest = { id: "slow", name: "Slow", permissions: ["post:read", "ui"] };
+      export default async function (editor) {
+        const show = (p) => editor.ui.status("text", p ? p.text.trim().split("\\n").pop() : "none");
+        editor.on("post:change", show);
+        await new Promise((r) => setTimeout(r, 30));
+        show(editor.document.post);
+      }`;
+    const running = host.run([{ ...parseExtension(source), origin: "installed" }]);
+    await new Promise((r) => setTimeout(r, 5));
+    b.text = "---\ntitle: a\n---\n\nTwo.\n";
+    host.emit("post:change", b.post());
+    await running;
+    await until(() => host.statuses[0]?.spec.text === "Two.");
+    expect(host.statuses[0]?.spec.text).toBe("Two.");
+  });
+
   it("runs an extension in a worker, checks permissions, and routes tools, hooks and commands", async () => {
     const post = snapshot("---\ntitle: a\n---\n\nHello world.\n");
     const log: string[] = [];

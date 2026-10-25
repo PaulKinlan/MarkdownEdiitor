@@ -41,9 +41,12 @@ interface Approvals {
 
 interface Installed {
   id: string;
+  /** Empty once removed. */
   source: string;
   from?: string;
   updatedAt: number;
+  /** A removal, kept so syncing removes it everywhere instead of bringing it back. */
+  deleted?: boolean;
 }
 
 async function loadApprovals(): Promise<Approvals> {
@@ -66,6 +69,7 @@ export async function listExtensions(site?: { id: string; handle: FileSystemDire
   const approvals = await loadApprovals();
   const out: LibraryEntry[] = builtinExtensions().map((r) => entry(r, `builtin:${r.manifest.id}`, approvals));
   for (const item of await loadInstalled()) {
+    if (item.deleted) continue;
     try {
       out.push(entry({ ...parseExtension(item.source), origin: "installed", from: item.from }, `installed:${item.id}`, approvals, { updatedAt: item.updatedAt }));
     } catch {
@@ -139,15 +143,24 @@ export async function install(source: string, from: string | undefined, settings
   const builtin = builtinExtensions().some((b) => b.manifest.id === id);
   if (builtin) throw new Error(`${id} is the id of a built-in extension; pick another.`);
   const list = (await loadInstalled()).filter((i) => i.id !== id);
-  list.push({ id, source, ...(from ? { from } : {}), updatedAt: Date.now() });
+  const item: Installed = { id, source, ...(from ? { from } : {}), updatedAt: Date.now() };
+  list.push(item);
   await set(INSTALLED_KEY, list);
-  if (settings) await remote(settings, `/api/extensions/${id}`, { method: "PUT", body: JSON.stringify({ source, from }) }).catch(() => undefined);
+  if (settings) await upload(settings, item).catch(() => undefined);
   return record;
 }
 
 export async function uninstall(id: string, settings?: AgentSettings) {
-  await set(INSTALLED_KEY, (await loadInstalled()).filter((i) => i.id !== id));
-  if (settings) await remote(settings, `/api/extensions/${id}`, { method: "DELETE" }).catch(() => undefined);
+  const item: Installed = { id, source: "", updatedAt: Date.now(), deleted: true };
+  await set(INSTALLED_KEY, [...(await loadInstalled()).filter((i) => i.id !== id), item]);
+  if (settings) await upload(settings, item).catch(() => undefined);
+}
+
+function upload(settings: AgentSettings, item: Installed) {
+  const path = `/api/extensions/${item.id}`;
+  return item.deleted
+    ? remote(settings, `${path}?at=${item.updatedAt}`, { method: "DELETE" })
+    : remote(settings, path, { method: "PUT", body: JSON.stringify({ source: item.source, from: item.from, updatedAt: item.updatedAt }) });
 }
 
 /** Fetches an extension's source from a URL (it must be served with CORS if it's on another origin). */
@@ -158,8 +171,9 @@ export async function fetchSource(url: string): Promise<string> {
 }
 
 /**
- * Brings this browser's installed extensions and the server's library together:
- * the newer copy of each wins, and ones only here are uploaded. Returns true if anything here changed.
+ * Brings this browser's installed extensions and the server's library together.
+ * For each id the newer change wins, removals included, and changes only here
+ * are uploaded. Returns true if anything here changed.
  */
 export async function syncLibrary(settings: AgentSettings): Promise<boolean> {
   const server = await remote<Installed[]>(settings, "/api/extensions");
@@ -168,7 +182,7 @@ export async function syncLibrary(settings: AgentSettings): Promise<boolean> {
   let changed = false;
   for (const item of server) {
     const mine = byId.get(item.id);
-    if (!mine || mine.updatedAt < item.updatedAt) {
+    if (mine ? mine.updatedAt < item.updatedAt : !item.deleted) {
       byId.set(item.id, item);
       changed = true;
     }
@@ -176,9 +190,7 @@ export async function syncLibrary(settings: AgentSettings): Promise<boolean> {
   const serverIds = new Map(server.map((s) => [s.id, s.updatedAt]));
   for (const item of local) {
     const theirs = serverIds.get(item.id);
-    if (theirs === undefined || theirs < item.updatedAt) {
-      await remote(settings, `/api/extensions/${item.id}`, { method: "PUT", body: JSON.stringify({ source: item.source, from: item.from }) }).catch(() => undefined);
-    }
+    if (theirs === undefined || theirs < item.updatedAt) await upload(settings, item).catch(() => undefined);
   }
   if (changed) await set(INSTALLED_KEY, [...byId.values()]);
   return changed;

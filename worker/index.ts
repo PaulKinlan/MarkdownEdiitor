@@ -70,11 +70,15 @@ async function route(request: Request, url: URL, env: Env): Promise<Response> {
       try {
         if (!m[1] && request.method === "GET") return Response.json(await store.list());
         if (m[1] && request.method === "PUT") {
-          const body = (await request.json()) as { source?: unknown; from?: unknown };
+          const body = (await request.json()) as { source?: unknown; from?: unknown; updatedAt?: unknown };
           if (typeof body.source !== "string") return Response.json({ error: "Expected { source }" }, { status: 400 });
-          return Response.json(await store.put(m[1], body.source, typeof body.from === "string" ? body.from : undefined));
+          const at = typeof body.updatedAt === "number" ? body.updatedAt : undefined;
+          return Response.json(await store.put(m[1], body.source, typeof body.from === "string" ? body.from : undefined, at));
         }
-        if (m[1] && request.method === "DELETE") return Response.json({ removed: await store.remove(m[1]) });
+        if (m[1] && request.method === "DELETE") {
+          const at = Number(url.searchParams.get("at")) || undefined;
+          return Response.json(await store.remove(m[1], at));
+        }
       } catch (e) {
         return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
       }

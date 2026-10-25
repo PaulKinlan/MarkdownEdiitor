@@ -85,7 +85,7 @@ All offsets (selection, annotations) are character offsets into `text`.
 - `editor.document.post`: the snapshot from the last event (or `null`). Synchronous.
 - `editor.document.text`: shorthand for `editor.document.post?.text ?? ""`.
 - `await editor.document.read()`: the current snapshot from the editor (use it inside tools).
-- `await editor.document.applyEdits([{ find, replace }])` (`post:write`): each `find` must occur exactly once in `text`. Returns `{ applied, problems }`. Edits go through the editor's undo history.
+- `await editor.document.applyEdits([{ find, replace }])` (`post:write`): each `find` must occur exactly once in `text`, inside the body (front matter can't be edited by extensions). Returns `{ applied, problems }`. Edits go through the editor's undo history.
 - `await editor.document.insert(text)` (`post:write`): inserts at the cursor, replacing the selection.
 - `await editor.document.annotate(set, annotations)` (`post:read` + `ui`): underlines ranges of the post, with a note on hover. `set` names a group (say `"long-sentences"`); calling it again replaces that group, and `[]` clears it. Each annotation is `{ from, to, severity: "info" | "warning" | "error", message }`. At most 500 per set. Annotations follow edits until you send new ones.
 

@@ -244,7 +244,7 @@ export class MdApp extends LitElement {
 
   private readonly extensions = new ExtensionController({
     snapshot: () => this.extensionSnapshot(),
-    applyEdits: (edits) => this.toolHost.applyEdits(edits),
+    applyEdits: (edits) => this.extensionEdits(edits),
     insert: (text) => {
       if (!this.open || !this.editor) return false;
       this.editor.insert(text);
@@ -1017,6 +1017,20 @@ export class MdApp extends LitElement {
     } catch {
       return false;
     }
+  }
+
+  /** Extension edits stay in the body, where the editor can undo them; front matter changes go through the assistant. */
+  private extensionEdits(edits: Edit[]) {
+    const problems: string[] = [];
+    let applied = 0;
+    edits.forEach((edit, i) => {
+      const bodyStart = this.open ? this.text.length - this.open.post.body.length : 0;
+      if (this.open && this.text.indexOf(edit.find) !== -1 && this.text.indexOf(edit.find) < bodyStart) {
+        problems.push(`Edit ${i + 1}: extensions can only edit the post body, not the front matter.`);
+      } else if (this.applyEdit(edit)) applied++;
+      else problems.push(`Edit ${i + 1}: find text not found exactly once.`);
+    });
+    return { applied, problems };
   }
 
   // ---- Tools for browser agents (WebMCP) ----------------------------------------

@@ -179,7 +179,8 @@ export class ExtensionController extends EventTarget {
   }
 
   async setEnabled(entry: LibraryEntry, enabled: boolean) {
-    if (enabled && entry.unapproved.length) return this.approve(entry);
+    // Turning one on is the author's approval, even of an extension that asks for nothing.
+    if (enabled) return this.approve(entry);
     await setEnabled(entry.key, enabled);
     await this.load(this.site);
   }
