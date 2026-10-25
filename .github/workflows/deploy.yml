@@ -78,7 +78,19 @@ jobs:
         run: |
           extra=""
           if [ "${{ github.ref_name }}" != "main" ]; then extra="--var DEMO_MODEL:1"; fi
-          npx wrangler deploy --name "${{ steps.target.outputs.name }}" $extra | tee deploy.log
+          name="${{ steps.target.outputs.name }}"
+          if ! npx wrangler deploy --name "$name" $extra 2>&1 | tee deploy.log; then
+            # A preview Worker whose Durable Object migrations no longer match the branch (main merged
+            # in a migration with the same tag) can't be migrated (code 10074). Previews hold nothing
+            # worth keeping, so that one starts over. Production is never deleted.
+            if [ "${{ github.ref_name }}" != "main" ] && grep -q "code: 10074" deploy.log; then
+              echo "::notice::Recreating $name: its Durable Object migrations no longer match this branch."
+              npx wrangler delete --name "$name" --force
+              npx wrangler deploy --name "$name" $extra 2>&1 | tee deploy.log
+            else
+              exit 1
+            fi
+          fi
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
