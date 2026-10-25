@@ -24,7 +24,9 @@ import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import type { MdEditor } from "./md-editor";
 import { BUILTIN_SKILLS } from "../shared/builtin-skills";
 import { mergeSkills, type Skill } from "../shared/skills";
-import { loadSiteSkills } from "../lib/site-skills";
+import { installSiteSkill, loadSiteSkills, removeSiteSkill } from "../lib/site-skills";
+import { fetchSkillsFromGitHub, loadInstalledSkills, refreshSkill, saveInstalledSkills } from "../lib/skill-install";
+import type { SkillManager } from "./skills-dialog";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
 import "./frontmatter-form";
@@ -211,6 +213,8 @@ export class MdApp extends LitElement {
   private siteInstructions = "";
   /** Skills from the site folder (.agents/skills, .claude/skills), sent to the assistant with the post. */
   @state() private siteSkills: Skill[] = [];
+  /** Skills installed from GitHub for every site, kept in this browser. */
+  @state() private installedSkills: Skill[] = [];
   private stopWatching?: () => void;
   private unregisterTools?: () => void;
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
@@ -243,6 +247,7 @@ export class MdApp extends LitElement {
     this.unregisterTools = registerEditorTools(this.toolHost);
     watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
+    void loadInstalledSkills().then((skills) => (this.installedSkills = skills));
     this.sites = await loadSites();
     listenForLaunches((launch) => void this.onLaunch(launch));
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
@@ -779,6 +784,61 @@ export class MdApp extends LitElement {
     const id = sessionId(this.site.id, this.open.summary.path);
     this.connection = isOnDevice(this.agentSettings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.agentSettings, id);
     this.connection.updatePost(this.postContext()!);
+    this.connection.updateSkills(this.extraSkills());
+  }
+
+  /** Skills beyond the built-in ones; a site's own skill replaces an installed one with the same name. */
+  private extraSkills(): Skill[] {
+    return mergeSkills(this.installedSkills, this.siteSkills);
+  }
+
+  private skillManager(): SkillManager {
+    const site = this.site;
+    return {
+      hasSite: !!site && !this.needsPermission,
+      install: async (source, target) => {
+        const { skills } = await fetchSkillsFromGitHub(source);
+        if (target === "site") {
+          if (!site) throw new Error("Open a site first.");
+          for (const { skill, markdown } of skills) await installSiteSkill(site.handle, skill, markdown);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(mergeSkills(this.installedSkills, skills.map((d) => ({ ...d.skill, source: "installed" }))));
+        }
+        return skills.map((d) => d.skill.name);
+      },
+      update: async (skill) => {
+        const { skill: fresh, markdown } = await refreshSkill(skill);
+        if (skill.source === "site" && site) {
+          await installSiteSkill(site.handle, fresh, markdown, skill.folder);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(this.installedSkills.map((s) => (s.name === skill.name ? { ...fresh, source: "installed" } : s)));
+        }
+      },
+      remove: async (skill) => {
+        if (skill.source === "site" && site && skill.folder) {
+          await removeSiteSkill(site.handle, skill.folder);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(this.installedSkills.filter((s) => s.name !== skill.name));
+        }
+      },
+    };
+  }
+
+  private async saveInstalled(skills: Skill[]) {
+    await saveInstalledSkills(skills);
+    this.installedSkills = skills;
+  }
+
+  private async reloadSiteSkills() {
+    const site = this.site;
+    const generation = this.siteGeneration;
+    if (!site) return;
+    const skills = await loadSiteSkills(site.handle);
+    // Dropped if another site was opened (or this one reloaded) meanwhile.
+    if (this.site === site && generation === this.siteGeneration) this.siteSkills = skills;
   }
 
   /** The site assistant is shown with no post open, or when picked in the panel. */
@@ -813,7 +873,6 @@ export class MdApp extends LitElement {
       contentDir: this.config.contentDir,
       sections: sections(this.posts),
       ...(this.open ? { openPath: this.open.summary.path } : {}),
-      skills: this.siteSkills,
     };
   }
 
@@ -839,7 +898,6 @@ export class MdApp extends LitElement {
       url: this.open.summary.url,
       text: this.text,
       shortcodes: this.shortcodes,
-      skills: this.siteSkills,
     };
   }
 
@@ -988,9 +1046,11 @@ export class MdApp extends LitElement {
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
+    if ((changed.has("siteSkills") || changed.has("installedSkills")) && this.connection) this.connection.updateSkills(this.extraSkills());
     // Opened lazily, the first time the site assistant is on screen.
     const assistantShown = this.narrow ? this.mobileView === "assistant" : this.showPreview && this.effectiveTab === "assistant";
     if (assistantShown && this.scope === "site" && this.agentServerUp) this.ensureSiteConnection();
+    if (this.siteConnection && (changed.has("siteSkills") || changed.has("installedSkills") || changed.has("siteConnection"))) this.siteConnection.updateSkills(this.extraSkills());
     if (this.siteConnection && ["posts", "open", "site", "config", "siteConnection"].some((k) => changed.has(k))) {
       const context = this.siteContext();
       if (context) this.siteConnection.updateSite(context);
@@ -1268,7 +1328,8 @@ export class MdApp extends LitElement {
             .scope=${this.scope}
             .hasPost=${!!this.open}
             @scope-change=${(e: CustomEvent<ActionScope>) => this.setScope(e.detail)}
-            .skills=${mergeSkills(BUILTIN_SKILLS, this.siteSkills)}
+            .skills=${mergeSkills(BUILTIN_SKILLS, this.extraSkills())}
+            .skillManager=${this.skillManager()}
             @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
             @apply-edit=${this.onApplyEdit}
             @apply-file-change=${this.onApplyFileChange}

@@ -4,6 +4,7 @@ import { createRegistry, Harness, type Conversation, type Extension, type Wake }
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ClientToServer, ModelRef, PostContext, ServerToClient, SiteContext } from "../../src/shared/protocol";
+import { mergeSkills, type Skill } from "../../src/shared/skills";
 import type { Env } from "../env";
 import { createConfiguredModels } from "./models";
 import { projectView } from "./view";
@@ -28,6 +29,8 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
   protected database: DurableObjectSqliteDatabase;
   /** The latest context the editor sent; persisted so tools work after an eviction. */
   protected current?: Contexts[K];
+  /** Skills beyond the built-in ones, sent separately from the context because they can be large. */
+  protected skills: Skill[] = [];
   private lastView = "";
   private pending?: ReturnType<typeof setTimeout>;
   private latest: unknown;
@@ -44,6 +47,8 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       await this.database.exec("CREATE TABLE IF NOT EXISTS editor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
       const row = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = ?", kind);
       if (row) this.current = JSON.parse(row.value);
+      const skills = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'skills'");
+      if (skills) this.skills = JSON.parse(skills.value);
 
       const registry = createRegistry();
       for (const extension of extensions(this)) registry.install(extension);
@@ -64,6 +69,11 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       const view = await this.root.viewState(context);
       view.subscribe(() => this.scheduleBroadcast(view.value));
     });
+  }
+
+  /** Skills sent with a `skills` message, then any that came with the context (older editors, extensions). */
+  protected allSkills(): Skill[] {
+    return mergeSkills(this.skills, this.current?.skills);
   }
 
   /** The SiteIndex for the site in the current context. */
@@ -93,6 +103,13 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
         case "site":
           if (message.type !== this.kind) return this.send(ws, { type: "error", message: `This session takes ${this.kind} context, not ${message.type}.` });
           await this.setContext((message.type === "post" ? message.post : message.site) as Contexts[K]);
+          break;
+        case "skills":
+          this.skills = message.skills;
+          await this.database.run(
+            "INSERT INTO editor_state (key, value) VALUES ('skills', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            JSON.stringify(message.skills),
+          );
           break;
         case "prompt":
           await this.prompt(message.text, message.model, message.requestId, message.label);

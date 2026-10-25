@@ -20,7 +20,7 @@ export class AgentSession extends ConversationObject<"post"> {
           fetchUrl: fetchReadable,
         }),
         createResearchExtension(),
-        createSkillsExtension("post", () => post()?.skills),
+        createSkillsExtension("post", () => (self as AgentSession).allSkills()),
       ];
     });
   }

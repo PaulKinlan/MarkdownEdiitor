@@ -25,7 +25,7 @@ export interface PostContext {
   text: string;
   /** Names of the site's Hugo shortcodes, so agents can use them. */
   shortcodes?: string[];
-  /** Skills beyond the built-in ones: from the site folder, the author, or extensions. */
+  /** More skills, merged after those sent with a `skills` message. Prefer the message: this is resent while typing. */
   skills?: Skill[];
 }
 
@@ -64,6 +64,8 @@ export interface Edit {
 
 export type ClientToServer =
   | { type: "post"; post: PostContext }
+  /** Every skill beyond the built-in ones (site folder, installed, extensions). Sent on connect and when they change. */
+  | { type: "skills"; skills: Skill[] }
   | { type: "site"; site: SiteContext }
   | { type: "prompt"; text: string; model: ModelRef; requestId: string; label?: string }
   | { type: "abort" }
