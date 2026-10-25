@@ -128,7 +128,7 @@ export class MdApp extends LitElement {
   /** Text shared to the app, waiting to become a new post. */
   @state() private shared?: { title: string; text: string };
   /** A launch to act on once the site it needs has loaded. */
-  private pendingLaunch?: { path?: string; share?: Launch["share"]; action?: string };
+  private pendingLaunch?: { siteId?: string; path?: string; share?: Launch["share"]; action?: string };
   private siteInstructions = "";
 
   @query("md-editor") private editor?: MdEditor;
@@ -283,9 +283,14 @@ export class MdApp extends LitElement {
         const parts = await site.handle.resolve(file);
         if (!parts) continue;
         this.orphanFile = undefined;
-        this.pendingLaunch = { path: parts.join("/") };
-        if (site !== this.site) await this.selectSite(site, false);
-        else await this.runPendingLaunch();
+        this.pendingLaunch = { siteId: site.id, path: parts.join("/") };
+        if (site !== this.site) {
+          await this.selectSite(site, false);
+          // Switching was cancelled (unsaved changes): drop the launch rather than open it in another site later.
+          if (this.site !== site) this.pendingLaunch = undefined;
+        } else {
+          await this.runPendingLaunch();
+        }
         return;
       }
       this.orphanFile = file;
@@ -300,6 +305,11 @@ export class MdApp extends LitElement {
     const launch = this.pendingLaunch;
     const { site, config } = this;
     if (!launch || !site || !config || this.loading || this.needsPermission) return;
+    // A file launch belongs to one site: if the user moved to another before allowing access, it's stale.
+    if (launch.siteId && launch.siteId !== site.id) {
+      this.pendingLaunch = undefined;
+      return;
+    }
     this.pendingLaunch = undefined;
     if (launch.path) {
       if (!launch.path.startsWith(`${config.contentDir}/`)) {
@@ -643,7 +653,7 @@ export class MdApp extends LitElement {
           </select>
           <button class="ghost" ?disabled=${!this.site} @click=${() => this.settingsDialog?.showModal()}>Settings</button>`
         : nothing}
-      ${this.supportsPicker ? html`<button @click=${this.addSite}>Add site folder…</button>` : nothing}
+      ${this.supportsPicker ? html`<button @click=${() => this.addSite()}>Add site folder…</button>` : nothing}
       <span class="spacer"></span>
       ${this.applyUpdate ? html`<button @click=${this.installUpdate} title="A new version of the editor is ready">Update</button>` : nothing}
       ${this.open ? html`<button @click=${this.togglePreview} aria-pressed=${this.showPreview}>Side panel</button>` : nothing}
@@ -666,7 +676,7 @@ export class MdApp extends LitElement {
           ? html`<p>Pick the root folder of a Hugo site (the one with <code>hugo.toml</code> or <code>config.toml</code>). The editor reads and writes files there directly and remembers the folder for next time.</p>`
           : html`<p>This browser can't open local folders (it needs the File System Access API, available in Chrome and Edge). You can still try the editor with a sample site stored in the browser.</p>`}
         <div class="actions">
-          ${this.supportsPicker ? html`<button class="primary" @click=${this.addSite}>Add site folder…</button>` : nothing}
+          ${this.supportsPicker ? html`<button class="primary" @click=${() => this.addSite()}>Add site folder…</button>` : nothing}
           <button @click=${this.addSampleSite}>Try a sample site</button>
         </div>
       </div>`;

@@ -36,7 +36,11 @@ sw.addEventListener("install", (event) => {
 sw.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      for (const key of await caches.keys()) if (key.startsWith("app-") && key !== CACHE) await caches.delete(key);
+      // Keep the previous version too: other open windows still run it until they reload, and may
+      // lazily load its chunks, which the new deploy no longer serves. Anything older goes.
+      // caches.keys() lists caches in creation order.
+      const old = (await caches.keys()).filter((key) => key.startsWith("app-") && key !== CACHE);
+      for (const key of old.slice(0, -1)) await caches.delete(key);
       await sw.registration.navigationPreload?.enable();
       await sw.clients.claim();
     })(),
@@ -74,7 +78,8 @@ async function navigate(event: FetchEvent): Promise<Response> {
 
 /** Built files have hashed names, so a cached copy is always right. Misses are cached for offline use. */
 async function fromCache(request: Request): Promise<Response> {
-  const cached = await caches.match(request, { cacheName: CACHE });
+  // Any version's cache: a window still on the previous version needs its files.
+  const cached = (await caches.match(request, { cacheName: CACHE })) ?? (await caches.match(request));
   if (cached) return cached;
   const response = await fetch(request);
   if (response.ok && new URL(request.url).pathname.startsWith("/assets/")) {

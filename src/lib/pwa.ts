@@ -44,14 +44,16 @@ export function listenForLaunches(onLaunch: (launch: Launch) => void) {
     if (launch.files.length || launch.share || launch.action) onLaunch(launch);
   });
   // Leave a clean URL, so a reload doesn't share the same text again.
-  if (location.search) history.replaceState(null, "", location.pathname);
+  if (location.search || location.pathname !== "/") history.replaceState(null, "", "/");
 }
 
 function fromUrl(href?: string): Launch {
   const launch: Launch = { files: [] };
   if (!href) return launch;
-  const params = new URL(href).searchParams;
-  if (params.get("source") === "share") {
+  const url = new URL(href);
+  const params = url.searchParams;
+  // A GET share target replaces the action's query with the shared fields, so the share is marked by its path.
+  if (url.pathname === "/share") {
     // Android puts a shared link in `text`, desktop Chrome in `url`: keep whichever arrived.
     const title = params.get("title")?.trim() ?? "";
     const text = [params.get("text"), params.get("url")].filter(Boolean).join("\n\n").trim();
@@ -77,11 +79,20 @@ export async function registerServiceWorker(onUpdate: (apply: () => void) => voi
     return;
   }
 
+  let switching = false;
   const offer = (worker: ServiceWorker) =>
     onUpdate(() => {
+      switching = true;
       navigator.serviceWorker.addEventListener("controllerchange", () => location.reload(), { once: true });
       worker.postMessage({ type: "skip-waiting" });
     });
+
+  // Another window accepted the update. This one keeps running the old build (the worker keeps the
+  // previous version's files for it), and offers a plain reload once the user is ready.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !switching) onUpdate(() => location.reload());
+  });
 
   // Only an update waits: a first install takes over without asking.
   if (registration.waiting && navigator.serviceWorker.controller) offer(registration.waiting);
