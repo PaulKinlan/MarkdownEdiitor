@@ -6,7 +6,24 @@
 export const SECRET_MASK = "••••••••";
 
 /** Names the built-in writing tools use; configured tools may not take them. */
-export const RESERVED_TOOL_NAMES = ["read_post", "propose_edits", "search_posts", "read_past_post", "web_search", "fetch_url", "web_fetch"];
+export const RESERVED_TOOL_NAMES = [
+  "read_post",
+  "propose_edits",
+  "propose_changes",
+  "search_posts",
+  "read_past_post",
+  "list_posts",
+  "grep_posts",
+  "list_terms",
+  "analyze_post",
+  "calculate",
+  "table_stats",
+  "browser_support",
+  "load_skill",
+  "web_search",
+  "fetch_url",
+  "web_fetch",
+];
 
 /** One tool an MCP server offers, as tools/list described it. */
 export interface McpToolInfo {

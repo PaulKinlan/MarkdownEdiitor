@@ -1,4 +1,4 @@
-import type { ChatItem, Edit, ServerToClient } from "../../src/shared/protocol";
+import type { ChatItem, Edit, FileChange, ServerToClient } from "../../src/shared/protocol";
 
 type Block = { type: string; text?: string; id?: string; name?: string; arguments?: unknown };
 type Message = {
@@ -48,8 +48,9 @@ export function projectView(view: ViewLike): Extract<ServerToClient, { type: "vi
       if (!item) continue;
       item.status = message.isError ? "error" : "done";
       item.summary = textOf(message.content).split("\n")[0]?.slice(0, 200);
-      const edits = (message.details as { edits?: Edit[] } | undefined)?.edits;
-      if (edits?.length) item.edits = edits;
+      const details = message.details as { edits?: Edit[]; changes?: FileChange[] } | undefined;
+      if (details?.edits?.length) item.edits = details.edits;
+      if (details?.changes?.length) item.changes = details.changes;
     } else if (entry.kind === "pi.reset") {
       items.length = 0;
       tools.clear();

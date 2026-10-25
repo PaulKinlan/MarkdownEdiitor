@@ -8,11 +8,13 @@ import { mergeHeaders } from "./tools/secrets";
 
 export { AgentSession } from "./agent/session";
 export { SiteIndex } from "./agent/site-index";
+export { SiteSession } from "./agent/site-session";
 export { ToolStore } from "./tools/store";
 
 // The editor runs in the browser against local folders. The Worker serves the
 // built app and the agent API: one AgentSession Durable Object per post
-// conversation, and one SiteIndex per site for searching past posts.
+// conversation, one SiteSession per site for the site-wide assistant, and one
+// SiteIndex per site for searching and reading past posts.
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -69,6 +71,13 @@ async function route(request: Request, url: URL, env: Env): Promise<Response> {
     let m = decodeURIComponent(url.pathname).match(/^\/api\/sessions\/([\w:-]{1,2048})\/ws$/);
     if (m) {
       const stub = env.AGENT_SESSION.get(env.AGENT_SESSION.idFromName(m[1]));
+      return stub.fetch(request);
+    }
+
+    // /api/sites/:siteId/session/ws: the site-wide assistant.
+    m = url.pathname.match(/^\/api\/sites\/([\w-]{1,100})\/session\/ws$/);
+    if (m) {
+      const stub = env.SITE_SESSION.get(env.SITE_SESSION.idFromName(m[1]));
       return stub.fetch(request);
     }
 
