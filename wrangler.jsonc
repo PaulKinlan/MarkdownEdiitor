@@ -17,12 +17,14 @@
       { "name": "AGENT_SESSION", "class_name": "AgentSession" },
       { "name": "SITE_INDEX", "class_name": "SiteIndex" },
       { "name": "SITE_SESSION", "class_name": "SiteSession" },
+      { "name": "TOOL_STORE", "class_name": "ToolStore" },
       { "name": "OBSERVABILITY", "class_name": "Observability" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["AgentSession", "SiteIndex"] },
     { "tag": "v2", "new_sqlite_classes": ["SiteSession"] },
+    { "tag": "tools-v1", "new_sqlite_classes": ["ToolStore"] },
     { "tag": "v3", "new_sqlite_classes": ["Observability"] }
   ]
 }

@@ -1,10 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createRegistry, Harness, type Conversation, type Extension, type Wake } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type Conversation, type Extension, type Registry, type Wake } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ClientToServer, ModelRef, PostContext, ServerToClient, SiteContext } from "../../src/shared/protocol";
+import { mergeSkills, type Skill } from "../../src/shared/skills";
+import type { ToolSettings } from "../../src/shared/tools";
 import type { Env } from "../env";
+import { addNativeWebTools, installConfiguredTools, loadToolSettings } from "../tools";
 import { createConfiguredModels } from "./models";
 import { projectView } from "./view";
 
@@ -28,9 +31,14 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
   protected database: DurableObjectSqliteDatabase;
   /** The latest context the editor sent; persisted so tools work after an eviction. */
   protected current?: Contexts[K];
+  /** Skills beyond the built-in ones, sent separately from the context because they can be large. */
+  protected skills: Skill[] = [];
   private lastView = "";
   private pending?: ReturnType<typeof setTimeout>;
   private latest: unknown;
+  private registry!: Registry;
+  private toolSettings?: ToolSettings;
+  private toolExtensions: Extension[] = [];
 
   constructor(ctx: DurableObjectState, env: Env, private readonly kind: K, extensions: (self: ConversationObject<K>) => Extension[]) {
     super(ctx, env);
@@ -44,14 +52,17 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       await this.database.exec("CREATE TABLE IF NOT EXISTS editor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
       const row = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = ?", kind);
       if (row) this.current = JSON.parse(row.value);
+      const skills = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'skills'");
+      if (skills) this.skills = JSON.parse(skills.value);
 
-      const registry = createRegistry();
+      const registry = (this.registry = createRegistry());
       for (const extension of extensions(this)) registry.install(extension);
+      await this.refreshTools();
       const storage = await SqliteStorage.open(this.database, { prefix: "pi_" });
       this.harness = await Harness.open(
         storage,
         {
-          models: createConfiguredModels(env),
+          models: addNativeWebTools(createConfiguredModels(env), () => this.toolSettings?.nativeWebTools ?? true),
           registry,
           identity: { attribution: { name: "hugo-editor", url: "https://github.com/PaulKinlan/MarkdownEdiitor" } },
           onWake: (wake) => void this.arm(wake).catch(() => ctx.abort("Alarm write failed")),
@@ -64,6 +75,11 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       const view = await this.root.viewState(context);
       view.subscribe(() => this.scheduleBroadcast(view.value));
     });
+  }
+
+  /** Skills sent with a `skills` message, then any that came with the context (older editors, extensions). */
+  protected allSkills(): Skill[] {
+    return mergeSkills(this.skills, this.current?.skills);
   }
 
   /** The SiteIndex for the site in the current context. */
@@ -93,6 +109,13 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
         case "site":
           if (message.type !== this.kind) return this.send(ws, { type: "error", message: `This session takes ${this.kind} context, not ${message.type}.` });
           await this.setContext((message.type === "post" ? message.post : message.site) as Contexts[K]);
+          break;
+        case "skills":
+          this.skills = message.skills;
+          await this.database.run(
+            "INSERT INTO editor_state (key, value) VALUES ('skills', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            JSON.stringify(message.skills),
+          );
           break;
         case "prompt":
           await this.prompt(message.text, message.model, message.requestId, message.label);
@@ -129,12 +152,23 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
     if (!current || current.provider !== model.provider || current.modelId !== model.modelId) {
       await this.root.configure({ model }, context);
     }
+    await this.refreshTools();
     // Arm before any call that can start work; a missing alarm would strand it after an eviction.
     await this.arm({ ...this.harness.wake(), active: true });
     await this.root.submit(
       { type: "input", content: text, requestId, ...(label ? { entry: { kind: "editor.prompt", data: { label } } } : {}) },
       context,
     );
+  }
+
+  /** Installs the author's MCP and HTTP tools (worker/tools), picking up changes since the last prompt. A settings outage keeps the tools we had. */
+  private async refreshTools() {
+    try {
+      this.toolSettings = await loadToolSettings(this.env);
+    } catch {
+      return;
+    }
+    this.toolExtensions = installConfiguredTools(this.registry, this.toolSettings, this.toolExtensions);
   }
 
   private async arm(wake: Wake) {

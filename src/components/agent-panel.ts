@@ -5,6 +5,8 @@ import { editDecisions, type AgentLink } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, SITE_ACTIONS, loadCustomActions, saveCustomActions, type ActionScope, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
 import { skillPrompt, skillsFor, skillTitle, type Skill } from "../shared/skills";
+import type { SkillManager, SkillsDialog } from "./skills-dialog";
+import "./skills-dialog";
 import { controls, lightDismiss } from "./shared";
 import { icon } from "./icons";
 
@@ -48,6 +50,9 @@ export class AgentPanel extends LitElement {
       .actions button { min-height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
       .actions + .actions { padding-top: 0; margin-top: -1px; }
       .actions .kind { font-size: 11px; color: var(--fg-2); align-self: center; min-width: 3.2em; }
+      /* One scrolling line, so many skills don't push the chat down. */
+      .actions.skills { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+      .actions.skills > * { flex: none; }
       .actions button.skill .icon { width: 12px; height: 12px; color: var(--accent); }
       .log { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
       /* Items keep their height when the log overflows; it scrolls instead. */
@@ -98,8 +103,10 @@ export class AgentPanel extends LitElement {
   @property() scope: ActionScope = "post";
   /** Whether a post is open, so the "This post" scope can be chosen. */
   @property({ type: Boolean }) hasPost = false;
-  /** Built-in skills plus the site's own, run with one click. */
+  /** Built-in, installed and site skills, run with one click. */
   @property({ attribute: false }) skills: Skill[] = [];
+  /** Installs, updates and removes skills; absent where that isn't possible. */
+  @property({ attribute: false }) skillManager?: SkillManager;
 
   @state() private custom: EditAction[] = loadCustomActions();
   @state() private error = "";
@@ -107,6 +114,7 @@ export class AgentPanel extends LitElement {
 
   @query(".log") private log?: HTMLElement;
   @query("#actions-dialog") private dialog?: HTMLDialogElement;
+  @query("skills-dialog") private skillsDialog?: SkillsDialog;
 
   private onChange = () => {
     const nearBottom = this.log ? this.log.scrollHeight - this.log.scrollTop - this.log.clientHeight < 80 : true;
@@ -362,10 +370,10 @@ export class AgentPanel extends LitElement {
         ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${`${a.prompt}\n\nText in the message box is sent with it.`} @click=${() => this.runAction(a)}>${a.name}</button>`)}
         <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
-      ${skills.length
-        ? html`<div class="actions" role="group" aria-label="Skills">
-            <span class="kind">Skills</span>
-            ${skills.map(
+      <div class="actions skills" role="group" aria-label="Skills">
+        <span class="kind">Skills</span>
+        <button class="ghost" title="Browse, install and manage skills" @click=${() => this.skillsDialog?.show()}>${icon("plus")} All skills (${skills.length})</button>
+        ${skills.map(
               (s) => html`<button
                 class="skill"
                 ?disabled=${busy || !this.connection}
@@ -374,9 +382,9 @@ export class AgentPanel extends LitElement {
               >
                 ${icon("sparkles")} ${skillTitle(s)}
               </button>`,
-            )}
-          </div>`
-        : nothing}
+        )}
+      </div>
+      <skills-dialog .skills=${skills} .manager=${this.skillManager} ?disabled=${busy || !this.connection} @run-skill=${(e: CustomEvent<Skill>) => this.send(skillPrompt(e.detail), skillTitle(e.detail))}></skills-dialog>
       <div class="log" aria-live="polite">
         ${this.configError ? html`<div class="empty error">${this.configError}</div>` : nothing}
         ${!view?.items.length && !this.configError

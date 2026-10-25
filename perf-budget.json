@@ -1,6 +1,6 @@
 {
   "$comment": "Ratchet: lower these when the app shrinks; raise them only with an ADR. criticalHtmlCss is the first-TCP-window target from the default web app prompt; bootJs is today's size plus a little headroom (CodeMirror and Lit, see docs/adr/0001).",
   "criticalHtmlCssGzipBytes": 14336,
-  "bootJsGzipBytes": 276480,
+  "bootJsGzipBytes": 286720,
   "renderBlockingScripts": 0
 }

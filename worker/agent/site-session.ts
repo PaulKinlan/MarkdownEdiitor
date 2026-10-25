@@ -3,7 +3,7 @@ import { ConversationObject } from "./conversation";
 import { createResearchExtension } from "./research";
 import { createSiteExtension } from "./site";
 import { createSkillsExtension } from "./skills";
-import { fetchReadable, webSearcher } from "./web";
+import { pageFetcher, webSearcher } from "./web";
 
 /**
  * The site-wide assistant: one conversation per site, with tools over every
@@ -24,10 +24,10 @@ export class SiteSession extends ConversationObject<"site"> {
           readFile: async (path) => (await index()?.file(path)) ?? undefined,
           searchPosts: async (query, limit) => (await index()?.search(query, limit)) ?? [],
           webSearch: webSearcher(env),
-          fetchUrl: fetchReadable,
+          fetchUrl: pageFetcher(env),
         }),
         createResearchExtension(),
-        createSkillsExtension("site", () => site()?.skills),
+        createSkillsExtension("site", () => (self as SiteSession).allSkills()),
       ];
     });
   }

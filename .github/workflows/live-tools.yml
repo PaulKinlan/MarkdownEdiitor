@@ -1,0 +1,30 @@
+name: Live tools
+
+# Checks the providers' server-side web tools against the real APIs (tests/live).
+# Runs when the tool code changes, or by hand. Each run makes a couple of small
+# Claude requests with web search and fetch.
+
+on:
+  push:
+    paths: ["worker/tools/**", "tests/live/**", ".github/workflows/live-tools.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Claude web search and fetch
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "::notice::No Claude key (ANTHROPIC_API_KEY or CLAUDE_API_KEY), so nothing to check."; exit 0; fi
+          npx vitest run tests/live

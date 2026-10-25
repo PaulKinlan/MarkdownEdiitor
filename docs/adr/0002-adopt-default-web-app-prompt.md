@@ -31,7 +31,7 @@ The [default web app prompt](https://github.com/PaulKinlan/default-web-app-promp
 
 - **Enforce the CSP.** Watch `/api/observability/errors` for `csp-violation` events for a week of real use (including the agent panel and on-device model), then rename the header to `Content-Security-Policy`.
 - **Unsaved-draft recovery (§11.3).** Checkpoint the open post's unsaved text to IndexedDB on input and `pagehide`, and offer it back after a crash. Touches `app.ts`, so it waits for the phone layout PR (#7) to land.
-- **Boot JavaScript.** The budget started at 260 KiB (252 KiB measured). Merging the site-wide assistant (PR #9) took the boot bundle to 261.3 KiB, so it was raised to 270 KiB rather than block that work; the next step is to lazy-load the agent panel, the site assistant and CodeMirror language data, then lower `perf-budget.json`.
+- **Boot JavaScript.** The budget started at 260 KiB (252 KiB measured). Merging the site-wide assistant (PR #9) took the boot bundle to 261.3 KiB, so it was raised to 270 KiB rather than block that work, and to 280 KiB when the tools and skill installs (PRs #11, #12) took it to 272.8 KiB; the next step is to lazy-load the agent panel, the site assistant and CodeMirror language data, then lower `perf-budget.json`.
 - **Offline / stale state (UI state 9).** Show when the assistant is unreachable and the time of the last index sync.
 - **An `/__admin` dashboard** over the observability endpoints, and hourly percentile rollups if the raw Vitals table grows large.
 - **Browser acceptance tests in CI** (CSP blocks inline script, zero console errors, zero layout shift).

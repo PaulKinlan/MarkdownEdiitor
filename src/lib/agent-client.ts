@@ -1,4 +1,6 @@
 import type { ClientToServer, ModelInfo, PostContext, ServerToClient, SiteContext } from "../shared/protocol";
+import type { Skill } from "../shared/skills";
+import type { McpToolInfo, ToolSettings } from "../shared/tools";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
 
@@ -37,6 +39,34 @@ async function api<T>(settings: AgentSettings, path: string, init?: RequestInit)
 
 export function fetchAgentConfig(settings: AgentSettings) {
   return api<{ models: ModelInfo[]; webSearch: boolean }>(settings, "/api/config");
+}
+
+export function fetchToolSettings(settings: AgentSettings) {
+  return api<ToolSettings>(settings, "/api/tools");
+}
+
+/** Saves tool settings; rejects with the server's reasons when they don't validate. */
+export async function saveToolSettings(settings: AgentSettings, tools: ToolSettings): Promise<ToolSettings> {
+  const res = await fetch(apiUrl(settings, "/api/tools"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}) },
+    body: JSON.stringify(tools),
+  });
+  const body = (await res.json().catch(() => ({}))) as { settings?: ToolSettings; problems?: string[]; error?: string };
+  if (!res.ok || !body.settings) throw new Error(body.problems?.join(" ") || body.error || `Saving tools failed: ${res.status}`);
+  return body.settings;
+}
+
+/** Lists an MCP server's tools. `id` lets the server use the stored token for a saved server. */
+export async function discoverMcpTools(settings: AgentSettings, server: { url: string; headers: Record<string, string>; id?: string }): Promise<McpToolInfo[]> {
+  const res = await fetch(apiUrl(settings, "/api/tools/mcp/discover"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}) },
+    body: JSON.stringify(server),
+  });
+  const body = (await res.json().catch(() => ({}))) as { tools?: McpToolInfo[]; error?: string };
+  if (!res.ok || !body.tools) throw new Error(body.error || `Could not reach the MCP server (${res.status})`);
+  return body.tools;
 }
 
 export function syncManifest(settings: AgentSettings, siteId: string, manifest: { path: string; lastModified: number }[]) {
@@ -85,6 +115,8 @@ export interface AgentLink extends EventTarget {
   readonly view?: ViewMessage;
   readonly status: "connecting" | "open" | "closed";
   updatePost(post: PostContext): void;
+  /** Skills beyond the built-in ones. */
+  updateSkills(skills: Skill[]): void;
   prompt(text: string, model: { provider: string; modelId: string }, label?: string): void;
   abort(): void;
   reset(): void;
@@ -104,6 +136,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private closed = false;
   private context?: Extract<ClientToServer, { type: "post" | "site" }>;
   private contextTimer?: ReturnType<typeof setTimeout>;
+  private skills?: Skill[];
 
   constructor(
     private settings: AgentSettings,
@@ -130,6 +163,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
       this.retry = 0;
       this.status = "open";
       if (this.context) this.send(this.context);
+      if (this.skills) this.send({ type: "skills", skills: this.skills });
       this.changed();
     };
     ws.onmessage = (e) => {
@@ -153,6 +187,12 @@ export class AgentConnection extends EventTarget implements AgentLink {
   /** Debounced: typing in the editor sends the text at most every 750 ms. */
   updatePost(post: PostContext) {
     this.setContext({ type: "post", post });
+  }
+
+  /** Sent now if connected, and again on every reconnect. */
+  updateSkills(skills: Skill[]) {
+    this.skills = skills;
+    if (this.ws?.readyState === WebSocket.OPEN) this.send({ type: "skills", skills });
   }
 
   updateSite(site: SiteContext) {
