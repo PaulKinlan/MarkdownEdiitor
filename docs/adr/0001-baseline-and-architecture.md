@@ -10,7 +10,7 @@ These are the four kickoff choices from the [default web app prompt](https://git
 The editor's core job (editing Hugo site folders on the user's disk) needs the File System Access API's `showDirectoryPicker`, which only Chromium ships. So:
 
 - **Chrome and Edge** get the full editor, plus cutting-edge APIs: the Prompt API and Summarizer, FileSystemObserver, WebMCP (origin trial), the custom spell check dictionary, Service Worker static routing, `navigator.crashReporter`.
-- **Every cutting-edge API is behind feature detection** with a working fallback (see the README's "Chrome features").
+- **Every cutting-edge API is behind feature detection** with a working fallback (see `docs/features/chrome.md`).
 - **Other browsers** get the sample site in the Origin Private File System, and the rest of the UI uses Baseline Newly Available features (`light-dark()`, `@starting-style`, `:has()`, popover, `<dialog>`), with fallbacks where a gap would break the page (for example the `light-dark()` fallback in `src/styles.css`).
 
 ## 2. Client stack: Lit and CodeMirror 6, not vanilla

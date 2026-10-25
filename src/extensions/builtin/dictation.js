@@ -3,6 +3,7 @@
 export const manifest = {
   id: "dictation",
   name: "Dictation",
+  order: 140,
   description: "Type by speaking: a Dictate button and command that insert what you say at the cursor (uses the browser's speech recognition).",
   version: "1.0.0",
   permissions: ["post:write", "ui", "microphone"],

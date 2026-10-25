@@ -11,17 +11,23 @@ export const manifest = {
   description: "Shows progress towards a word count goal.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],
+  order: 50,                    // optional: place in lists, lower first (default 1000)
+  settings: {                   // optional: a form in Settings → Extensions (see editor.settings)
+    goal: { type: "number", title: "Word goal", default: 1500 },
+  },
 };
 
-export default function (editor) {
+export default async function (editor) {
+  let { goal } = await editor.settings.get();
   const status = editor.ui.status("goal", "");
   const update = (post) => {
     if (!post) return status.set("");
     const words = post.text.slice(post.bodyStart).split(/\s+/).filter(Boolean).length;
-    status.set(`${words} / 1,500 words`);
+    status.set(`${words} / ${goal} words`);
   };
   editor.on("post:open", update);
   editor.on("post:change", update);
+  editor.on("settings:change", (values) => ((goal = values.goal), update(editor.document.post)));
   if (editor.document.post) update(editor.document.post);
 }
 ```
@@ -39,8 +45,9 @@ Rules:
 | Permission | Allows |
 | --- | --- |
 | `post:read` | `editor.document.*` reads, post events, `document.annotate` (with `ui`) |
-| `post:write` | `document.applyEdits`, `document.insert` (undoable), `document.save` |
-| `site:read` | `editor.site.readFile(path)`, `editor.site.posts()` |
+| `post:write` | `document.applyEdits`, `document.insert` (undoable), `document.setFrontMatter`, `document.save`, `editor.onBeforeSave` |
+| `site:read` | `editor.site.readFile(path)`, `editor.site.list(dir)`, `editor.site.posts()`, site events |
+| `site:write` | `editor.site.writeFile(path, text)`: the author reviews each write, or lets the extension write in a folder |
 | `ui` | commands, toolbar buttons, status items, notices, dialogs, panels |
 | `agent` | tools, skills, quick edits, system prompt sections, `agent.prompt` |
 | `agent:hooks` | `agent.onToolCall`, `agent.onToolResult` (see and change every assistant tool call) |
@@ -75,6 +82,10 @@ All offsets (selection, annotations) are character offsets into `text`.
 
 | Event | Handler gets |
 | --- | --- |
+| `site:open` | `{ id, name }` when a site opens (`site:read`) |
+| `site:close` | `null` when the site closes (`site:read`) |
+| `site:files-changed` | `{ paths, rescan }` when files in the site folder change outside the editor (git, another app) or an extension wrote one; `rescan: true` means the browser lost track and anything may have changed. The same path can arrive more than once (`site:read`) |
+| `settings:change` | the extension's new settings, after the author changes them |
 | `post:open` | the post snapshot, when a post opens |
 | `post:change` | the post snapshot, after the author stops typing for a moment (about 300 ms) |
 | `post:save` | the post snapshot, after a save |
@@ -94,12 +105,17 @@ All offsets (selection, annotations) are character offsets into `text`.
 - `await editor.document.insert(text)` (`post:write`): inserts at the cursor, replacing the selection.
 - `await editor.document.select(from, to?)` (`post:read` + `ui`): selects that range of the body, scrolls to it and focuses the editor. Returns `false` for a range in the front matter.
 - `await editor.document.save()` (`post:write`): saves the post, as Ctrl/⌘+S does. Returns `true` if it saved.
+- `await editor.document.frontMatter()` (`post:read`): the open post's front matter as an object, or `null` with no post open.
+- `await editor.document.setFrontMatter(key, value)` (`post:write`): sets one field through the editor's minimal-diff writer, so the rest of the front matter keeps its formatting and comments. `undefined` or `null` removes the field. Unlike body edits, it isn't in the editor's undo history; nothing is saved until the author saves.
+- `editor.onBeforeSave((post) => …)` (`post:write`): runs before every save with the post about to be written. Return `{ text }` to save different text (say, with `lastmod` updated; the editor shows it too), `{ block: "reason" }` to stop the save (the author sees the reason), or nothing. Hooks run in extension order, each seeing the previous one's text. Each has 4 seconds; on timeout or error the save goes ahead without it. Returns a function that removes the hook.
 - `await editor.document.annotate(set, annotations)` (`post:read` + `ui`): underlines ranges of the post, with a note on hover. `set` names a group (say `"long-sentences"`); calling it again replaces that group, and `[]` clears it. Each annotation is `{ from, to, severity: "info" | "warning" | "error", message }`. At most 500 per set. Annotations follow edits until you send new ones.
 
 ## editor.site
 
 - `await editor.site.readFile(path)` (`site:read`): the text of a file in the site folder, by path from the site root (`data/stats.json`, `static/demo/data.csv`, `hugo.toml`), or `null` if there is none.
+- `await editor.site.list(dir)` (`site:read`): the entries of a folder (`""` for the site root) as `{ name, kind: "file" | "directory" }`, or `null` if there's no such folder.
 - `await editor.site.posts()` (`site:read`): every post and note as `{ path, url, title, section, date?, draft, tags, categories }`.
+- `await editor.site.writeFile(path, text, { reason? })` (`site:write`): creates or replaces a file, by path from the site root (`static/demos/chart.html`, `data/stats.json`). The author sees the change (the new file, or the changed lines) with your `reason`, and accepts or declines it; they can also let your extension write in that folder without asking again. Resolves `true` once written, `false` if declined. The open post is refused (use `document.applyEdits`), and so are `.git*` and `.editor/` paths. Up to 5 MB.
 
 ## editor.ui
 
@@ -148,6 +164,13 @@ Needs `microphone`. One extension listens at a time; starting takes the micropho
 ## editor.storage
 
 - `await editor.storage.get(key)`, `await editor.storage.set(key, value)`: JSON values kept for this extension in this browser.
+
+## editor.settings
+
+Declare settings in the manifest and the author gets a form for them under the extension in Settings → Extensions. Each is `{ type: "string" | "number" | "boolean", title?, description?, default?, enum? }` (`enum`, for strings, is a list of choices). At most 30.
+
+- `await editor.settings.get()`: the values, with defaults for those the author hasn't set.
+- The `settings:change` event brings the new values when the author changes them.
 
 ## Where extensions live
 

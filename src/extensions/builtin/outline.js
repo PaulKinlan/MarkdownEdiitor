@@ -4,6 +4,7 @@ import { bodyWords, escapeHtml, headings } from "./text.js";
 export const manifest = {
   id: "outline",
   name: "Outline",
+  order: 120,
   description: "Shows the post's headings, with words per section, in an Outline panel. Click a heading to jump to it.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],

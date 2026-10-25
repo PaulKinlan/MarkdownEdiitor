@@ -19,7 +19,10 @@
       { "name": "SITE_SESSION", "class_name": "SiteSession" },
       { "name": "TOOL_STORE", "class_name": "ToolStore" },
       { "name": "OBSERVABILITY", "class_name": "Observability" },
-      { "name": "EXTENSION_STORE", "class_name": "ExtensionStore" }
+      { "name": "EXTENSION_STORE", "class_name": "ExtensionStore" },
+      // Storage for every other feature, one instance per feature and scope (worker/feature-store.ts).
+      // Add a class only with an ADR; see AGENTS.md.
+      { "name": "FEATURE_STORE", "class_name": "FeatureStore" }
     ]
   },
   "migrations": [
@@ -27,6 +30,7 @@
     { "tag": "v2", "new_sqlite_classes": ["SiteSession"] },
     { "tag": "tools-v1", "new_sqlite_classes": ["ToolStore"] },
     { "tag": "v3", "new_sqlite_classes": ["Observability"] },
-    { "tag": "extensions-v1", "new_sqlite_classes": ["ExtensionStore"] }
+    { "tag": "extensions-v1", "new_sqlite_classes": ["ExtensionStore"] },
+    { "tag": "2026-10-25-feature-store", "new_sqlite_classes": ["FeatureStore"] }
   ]
 }

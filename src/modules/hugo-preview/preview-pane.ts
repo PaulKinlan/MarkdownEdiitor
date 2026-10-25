@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { controls } from "./shared";
-import { icon } from "./icons";
+import { controls } from "../../components/shared";
+import { icon } from "../../components/icons";
 
 type Status = "unknown" | "checking" | "up" | "down" | "blocked";
 

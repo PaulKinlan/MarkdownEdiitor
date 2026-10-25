@@ -3,6 +3,7 @@
 export const manifest = {
   id: "word-count",
   name: "Word count",
+  order: 10,
   description: "Shows the post's word count and reading time in the status bar.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],

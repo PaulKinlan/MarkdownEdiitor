@@ -31,6 +31,8 @@ import type {
   Permission,
   PostSnapshot,
   QuickEditSpec,
+  SettingValues,
+  SiteEntry,
   SitePost,
   SkillSpec,
   ToolSpec,
@@ -42,6 +44,14 @@ export interface HostBridge {
   applyEdits(edits: { find: string; replace: string }[]): { applied: number; problems: string[] };
   insert(text: string): boolean;
   readSiteFile(path: string): Promise<string | null>;
+  /** The entries of a folder in the site, or null if there's no such folder. */
+  listSiteDir?(path: string): Promise<SiteEntry[] | null>;
+  /** Writes a file in the site once the author accepts it (or allowed the folder); resolves false if they didn't. */
+  writeSiteFile?(request: { extension: { id: string; name: string }; path: string; text: string; reason?: string }): Promise<boolean>;
+  /** The open post's front matter, or null with no post open. */
+  frontMatter?(): Record<string, unknown> | null;
+  /** Sets one front matter field through the minimal-diff writer; `undefined` removes it. False with no post open. */
+  setFrontMatter?(key: string, value: unknown): boolean;
   /** Selects a range of the post text and scrolls to it. */
   select?(from: number, to: number): boolean;
   /** The site's posts and notes. */
@@ -87,8 +97,18 @@ export interface HostOptions {
 const TIMEOUTS = { load: 10_000, tool: 110_000, hook: 4_000, command: 60_000 };
 const MAX_ANNOTATIONS = 500;
 const MAX_STATUS_CHARS = 80;
+/** Methods that wait for the author to answer. */
+const ASKS_AUTHOR = new Set<Method>(["ui.confirm", "ui.pick", "ui.input", "site.writeFile"]);
 
 export type ExtensionStatus = "loading" | "running" | "failed" | "stopped";
+
+interface Hooks {
+  beforeTool: boolean;
+  afterTool: boolean;
+  beforeSave: boolean;
+}
+
+const NO_HOOKS: Hooks = { beforeTool: false, afterTool: false, beforeSave: false };
 
 interface Running {
   record: ExtensionRecord;
@@ -107,7 +127,11 @@ interface Running {
   skills: Map<string, SkillSpec>;
   edits: Map<string, QuickEditSpec>;
   sections: Map<string, string>;
-  hooks: { beforeTool: boolean; afterTool: boolean };
+  hooks: Hooks;
+  /** Requests waiting on the author (a confirm, a pick, a write to review); calls into the extension don't time out meanwhile. */
+  askingAuthor: number;
+  /** When the author last answered one, so the extension gets its full time again from then. */
+  answeredAt: number;
   loaded: Promise<void>;
 }
 
@@ -189,7 +213,9 @@ export class ExtensionHost extends EventTarget {
       skills: new Map(),
       edits: new Map(),
       sections: new Map(),
-      hooks: { beforeTool: false, afterTool: false },
+      hooks: { ...NO_HOOKS },
+      askingAuthor: 0,
+      answeredAt: 0,
       loaded: Promise.resolve(),
     };
     this.running.set(manifest.id, ext);
@@ -246,7 +272,7 @@ export class ExtensionHost extends EventTarget {
     }
     ext.pending.clear();
     for (const map of [ext.commands, ext.buttons, ext.panels, ext.statuses, ext.annotations, ext.tools, ext.skills, ext.edits, ext.sections]) map.clear();
-    ext.hooks = { beforeTool: false, afterTool: false };
+    ext.hooks = { ...NO_HOOKS };
     this.changed();
   }
 
@@ -288,11 +314,18 @@ export class ExtensionHost extends EventTarget {
         if (missing.length) {
           return this.reply(ext, message.id, false, undefined, `${message.method} needs the ${missing.map((p) => `"${p}"`).join(", ")} permission in the manifest.`);
         }
+        const asking = ASKS_AUTHOR.has(message.method);
+        if (asking) ext.askingAuthor++;
         try {
           const value = await this.handle(ext, message.method, message.params as never);
           this.reply(ext, message.id, true, value);
         } catch (e) {
           this.reply(ext, message.id, false, undefined, e instanceof Error ? e.message : String(e));
+        } finally {
+          if (asking) {
+            ext.askingAuthor--;
+            ext.answeredAt = Date.now();
+          }
         }
         return;
       }
@@ -351,6 +384,25 @@ export class ExtensionHost extends EventTarget {
         return;
       case "site.readFile":
         return this.bridge.readSiteFile(String(p.path ?? ""));
+      case "site.list":
+        return (await this.bridge.listSiteDir?.(String(p.path ?? ""))) ?? null;
+      case "site.writeFile":
+        if (typeof p.text !== "string") throw new Error("writeFile needs the file's text as a string.");
+        return this.need(this.bridge.writeSiteFile)({
+          extension: { id: ext.record.manifest.id, name },
+          path: String(p.path ?? ""),
+          text: p.text,
+          ...(typeof p.reason === "string" && p.reason ? { reason: p.reason.slice(0, 300) } : {}),
+        });
+      case "document.frontMatter":
+        return this.bridge.frontMatter?.() ?? null;
+      case "document.setFrontMatter": {
+        const key = String(p.key ?? "");
+        if (!/^[A-Za-z_][\w.-]{0,63}$/.test(key)) throw new Error(`Invalid front matter key ${JSON.stringify(key)}.`);
+        return this.need(this.bridge.setFrontMatter)(key, p.value === null ? undefined : p.value);
+      }
+      case "settings.get":
+        return this.settings(ext.record.manifest.id);
       case "site.posts":
         return this.bridge.sitePosts?.() ?? [];
       case "ui.notify":
@@ -442,9 +494,13 @@ export class ExtensionHost extends EventTarget {
         if (!/^[a-z0-9_-]{1,64}$/.test(registration.spec.name)) throw new Error("Section names are lowercase letters, digits, _ and -.");
         ext.sections.set(registration.spec.name, String(registration.spec.text ?? ""));
         break;
-      case "hook":
-        ext.hooks = { beforeTool: ext.hooks.beforeTool || !!registration.spec.beforeTool, afterTool: ext.hooks.afterTool || !!registration.spec.afterTool };
+      case "hook": {
+        const { beforeTool, afterTool, beforeSave } = registration.spec;
+        if ((beforeTool || afterTool) && !this.granted(ext, "agent:hooks")) throw new Error('Tool hooks need the "agent:hooks" permission in the manifest.');
+        if (beforeSave && !this.granted(ext, "post:write")) throw new Error('onBeforeSave needs the "post:write" permission in the manifest.');
+        ext.hooks = { beforeTool: ext.hooks.beforeTool || !!beforeTool, afterTool: ext.hooks.afterTool || !!afterTool, beforeSave: ext.hooks.beforeSave || !!beforeSave };
         break;
+      }
     }
     this.changed();
   }
@@ -464,11 +520,20 @@ export class ExtensionHost extends EventTarget {
     if (!ext || ext.status !== "running") return Promise.reject(new Error(`The ${id} extension isn't running.`));
     return new Promise((resolve, reject) => {
       const callId = ext.nextId++;
-      const timer = setTimeout(() => {
+      // The clock stops while the extension waits on the author (reviewing a write, say), however long they
+      // take, and starts again in full once they answer.
+      const expire = () => {
+        const waiting = ext.pending.get(callId);
+        if (!waiting) return;
+        const sinceAnswer = Date.now() - ext.answeredAt;
+        if (ext.askingAuthor > 0 || sinceAnswer < timeoutMs) {
+          waiting.timer = setTimeout(expire, ext.askingAuthor > 0 ? timeoutMs : timeoutMs - sinceAnswer);
+          return;
+        }
         ext.pending.delete(callId);
         reject(new Error(`${ext.record.manifest.name} didn't answer within ${Math.round(timeoutMs / 1000)} s.`));
-      }, timeoutMs);
-      ext.pending.set(callId, { resolve: resolve as (v: unknown) => void, reject, timer });
+      };
+      ext.pending.set(callId, { resolve: resolve as (v: unknown) => void, reject, timer: setTimeout(expire, timeoutMs) });
       this.post(ext, { type: "invoke", id: callId, name, params });
     });
   }
@@ -482,6 +547,7 @@ export class ExtensionHost extends EventTarget {
   /** Tells every extension that may see it about an editor event. */
   emit(event: EditorEvent, data?: unknown) {
     const postEvent = event.startsWith("post:") || event === "selection";
+    const siteEvent = event.startsWith("site:");
     // Annotations belong to one post; extensions send new ones for the next.
     if (event === "post:open" || event === "post:close") {
       for (const ext of this.running.values()) ext.annotations.clear();
@@ -490,8 +556,52 @@ export class ExtensionHost extends EventTarget {
     for (const ext of this.running.values()) {
       if (ext.status !== "running") continue;
       if (postEvent && !this.granted(ext, "post:read")) continue;
+      if (siteEvent && !this.granted(ext, "site:read")) continue;
       this.post(ext, { type: "event", name: event, data: data ?? null });
     }
+  }
+
+  /**
+   * Runs the save hooks, in extension order, before a save. Each gets the post
+   * as the previous one left it and can return new text or block the save. A
+   * hook that throws or takes too long is skipped (and logged), so a broken
+   * extension can't stop the author saving.
+   */
+  async beforeSave(post: PostSnapshot): Promise<{ text: string; blocked?: string }> {
+    let current = post;
+    for (const ext of this.running.values()) {
+      if (ext.status !== "running" || !ext.hooks.beforeSave) continue;
+      const { id, name } = ext.record.manifest;
+      try {
+        const answer = await this.invoke(id, "beforeSave", { post: current }, this.timeouts.hook);
+        if (answer?.block) return { text: current.text, blocked: `${name}: ${String(answer.block).slice(0, 300)}` };
+        if (typeof answer?.text === "string" && answer.text !== current.text) current = { ...current, text: answer.text };
+      } catch (e) {
+        ext.logs = [...ext.logs.slice(-19), `onBeforeSave: ${e instanceof Error ? e.message : String(e)}`];
+        this.changed();
+      }
+    }
+    return { text: current.text };
+  }
+
+  // ---- Settings -------------------------------------------------------------------------
+
+  /** An extension's settings: what the author set, over the manifest's defaults. */
+  async settings(id: string): Promise<SettingValues> {
+    const specs = this.running.get(id)?.record.manifest.settings ?? {};
+    const stored = ((await this.storage.get(`extension:${id}:settings`)) ?? {}) as SettingValues;
+    const values: SettingValues = {};
+    for (const [key, spec] of Object.entries(specs)) {
+      const value = stored[key] ?? spec.default;
+      if (value !== undefined && typeof value === spec.type) values[key] = value;
+    }
+    return values;
+  }
+
+  /** Saves the author's settings for an extension and tells it. */
+  async setSettings(id: string, values: SettingValues) {
+    await this.storage.set(`extension:${id}:settings`, values);
+    this.emitTo(id, "settings:change", await this.settings(id));
   }
 
   runCommand(id: string, command: string) {
@@ -610,7 +720,7 @@ export class ExtensionHost extends EventTarget {
           ...(t.scope ? { scope: t.scope } : {}),
         })),
         sections: [...ext.sections].map(([name, text]) => ({ name, text })),
-        hooks: { ...ext.hooks },
+        hooks: { beforeTool: ext.hooks.beforeTool, afterTool: ext.hooks.afterTool },
       };
       if (spec.tools.length || spec.sections.length || spec.hooks.beforeTool || spec.hooks.afterTool) specs.push(spec);
     }

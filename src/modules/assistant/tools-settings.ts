@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
-import { discoverMcpTools, fetchToolSettings, saveToolSettings, type AgentSettings } from "../lib/agent-client";
+import { discoverMcpTools, fetchToolSettings, saveToolSettings, type AgentSettings } from "../../lib/agent-client";
 import {
   DEFAULT_TOOL_SETTINGS,
   HTTP_PRESETS,
@@ -11,9 +11,9 @@ import {
   type McpSource,
   type ToolSettings,
   type ToolSource,
-} from "../shared/tools";
-import { controls, lightDismiss } from "./shared";
-import { icon } from "./icons";
+} from "../../shared/tools";
+import { controls, lightDismiss } from "../../components/shared";
+import { icon } from "../../components/icons";
 
 type Header = { key: string; value: string };
 

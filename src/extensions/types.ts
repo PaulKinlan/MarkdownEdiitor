@@ -20,8 +20,10 @@ export type Permission =
   | "post:read"
   /** Edits to the open post. Always undoable, and never saved for the author. */
   | "post:write"
-  /** Read files in the current site folder. */
+  /** Read files in the current site folder, and hear when they change. */
   | "site:read"
+  /** Write files in the site folder, each after the author reviews it (or in folders they allowed). */
+  | "site:write"
   /** Commands, toolbar buttons, status items, notices, dialogs and panels. */
   | "ui"
   /** Agent tools, skills, quick edits and system prompt sections. */
@@ -41,6 +43,7 @@ export const PERMISSIONS: Record<Permission, string> = {
   "post:read": "Read the open post",
   "post:write": "Suggest edits to the open post (undoable, never saved for you)",
   "site:read": "Read files in the site folder",
+  "site:write": "Write files in the site folder (you review each one, or allow a folder)",
   ui: "Add commands, buttons, status items and panels",
   agent: "Add tools, skills and quick edits to the assistant",
   "agent:hooks": "See and change every assistant tool call",
@@ -59,7 +62,23 @@ export interface ExtensionManifest {
   permissions: Permission[];
   /** For built-in extensions: false leaves it off until the author turns it on. */
   enabledByDefault?: boolean;
+  /** Where it appears among extensions in lists, lower first (default 1000). */
+  order?: number;
+  /** Settings the author can change in Settings → Extensions; read with `editor.settings.get()`. */
+  settings?: Record<string, SettingSpec>;
 }
+
+/** One setting: a JSON Schema subset the editor renders as a form field. */
+export interface SettingSpec {
+  type: "string" | "number" | "boolean";
+  title?: string;
+  description?: string;
+  default?: string | number | boolean;
+  /** For strings: the choices, shown as a menu. */
+  enum?: string[];
+}
+
+export type SettingValues = Record<string, string | number | boolean>;
 
 /** Where an extension came from. */
 export type ExtensionOrigin = "builtin" | "site" | "installed";
@@ -153,7 +172,20 @@ export interface SitePost {
   categories: string[];
 }
 
+/** An entry in a site folder, as `editor.site.list()` gives it. */
+export interface SiteEntry {
+  name: string;
+  kind: "file" | "directory";
+}
+
 export type EditorEvent =
+  /** A site was opened (`{ id, name }`), or closed (`null`). Need `site:read`. */
+  | "site:open"
+  | "site:close"
+  /** Files in the site folder changed outside the editor, or the editor wrote them for an extension: `{ paths, rescan }`. */
+  | "site:files-changed"
+  /** The author changed this extension's settings: the new values. */
+  | "settings:change"
   | "post:open"
   | "post:change"
   | "post:save"

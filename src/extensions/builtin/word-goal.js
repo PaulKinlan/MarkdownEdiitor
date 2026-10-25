@@ -5,6 +5,7 @@ import { bodyWords, frontMatter } from "./text.js";
 export const manifest = {
   id: "word-goal",
   name: "Word goal",
+  order: 20,
   description: "Shows progress towards a word count goal, set per post with a command or a wordGoal front matter field.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],

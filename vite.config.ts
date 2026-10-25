@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { defineConfig, transformWithOxc, type Plugin } from "vite";
+import { ROUTES_DIR, SKILLS_DIR, writeRegistries } from "./scripts/registries.mjs";
 
 /** Adds an origin-trial meta tag for each token in ORIGIN_TRIAL_TOKENS (comma-separated), e.g. for WebMCP. */
 function originTrials() {
@@ -14,11 +15,28 @@ function originTrials() {
 export default defineConfig({
   build: { outDir: "dist", target: "es2022" },
   define: { __COMMIT__: JSON.stringify(process.env.GITHUB_SHA ?? "dev") },
-  plugins: [originTrials(), extensionWorkers(), serviceWorker(), securityHeaders()],
+  plugins: [registries(), originTrials(), extensionWorkers(), serviceWorker(), securityHeaders()],
   // `npm run dev:worker` serves the agent API on 8787.
   server: { proxy: { "/api": { target: "http://localhost:8787", ws: true } } },
-  test: { environment: "node", include: ["tests/**/*.test.ts"] },
+  test: { environment: "node", include: ["tests/**/*.test.ts"], alias: { "cloudflare:workers": new URL("./tests/stubs/cloudflare-workers.ts", import.meta.url).pathname } },
 });
+
+/** Keeps the generated registries (scripts/registries.mjs) current while `npm run dev` runs. */
+function registries(): Plugin {
+  return {
+    name: "registries",
+    buildStart: () => writeRegistries(),
+    configureServer(server) {
+      server.watcher.add([SKILLS_DIR, ROUTES_DIR]);
+      // A broken file while editing keeps the last good registry and says why, instead of stopping the server.
+      const update = (path: string) => {
+        if (!path.startsWith(SKILLS_DIR) && !path.startsWith(ROUTES_DIR)) return;
+        writeRegistries().catch((e: unknown) => server.config.logger.error(`Registries not updated: ${e instanceof Error ? e.message : e}`));
+      };
+      for (const event of ["add", "change", "unlink"] as const) server.watcher.on(event, update);
+    },
+  };
+}
 
 /**
  * Copies the extension worker to two fixed paths, so public/_headers can give

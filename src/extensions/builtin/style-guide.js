@@ -6,6 +6,7 @@ import { lineOf, prose } from "./text.js";
 export const manifest = {
   id: "style-guide",
   name: "Style guide",
+  order: 70,
   description: "Underlines words your site's style guide replaces or avoids (.editor/style-guide.json) and gives the assistant the guide (.editor/style-guide.md).",
   version: "1.0.0",
   permissions: ["post:read", "site:read", "ui", "agent"],

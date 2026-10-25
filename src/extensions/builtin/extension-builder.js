@@ -4,6 +4,7 @@
 export const manifest = {
   id: "extension-builder",
   name: "Extension builder",
+  order: 180,
   description: "Lets the assistant write and install editor extensions for you. You approve each one before it runs.",
   version: "1.0.0",
   permissions: ["agent", "extensions"],

@@ -1,14 +1,14 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
-import type { ChatItem, Edit, FileChange, ModelInfo } from "../shared/protocol";
-import { editDecisions, type AgentLink } from "../lib/agent-client";
-import { BUILTIN_ACTIONS, SITE_ACTIONS, loadCustomActions, saveCustomActions, type ActionScope, type EditAction } from "../lib/actions";
-import { diffWords } from "../lib/diff";
-import { skillPrompt, skillsFor, skillTitle, type Skill } from "../shared/skills";
+import type { ChatItem, Edit, FileChange, ModelInfo } from "../../shared/protocol";
+import { editDecisions, type AgentLink } from "../../lib/agent-client";
+import { BUILTIN_ACTIONS, SITE_ACTIONS, loadCustomActions, saveCustomActions, type ActionScope, type EditAction } from "../../lib/actions";
+import { diffWords } from "../../lib/diff";
+import { skillPrompt, skillsFor, skillTitle, type Skill } from "../../shared/skills";
 import type { SkillManager, SkillsDialog } from "./skills-dialog";
 import "./skills-dialog";
-import { controls, lightDismiss } from "./shared";
-import { icon } from "./icons";
+import { controls, lightDismiss } from "../../components/shared";
+import { icon } from "../../components/icons";
 
 type EditState = "pending" | "applying" | "accepted" | "rejected" | "stale";
 

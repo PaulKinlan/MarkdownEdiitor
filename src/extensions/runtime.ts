@@ -25,6 +25,7 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
   const panelHandlers = new Map<string, Set<(message: unknown) => unknown>>();
   const beforeTool: ((call: { tool: string; args: unknown }) => unknown)[] = [];
   const afterTool: ((call: { tool: string; args: unknown; result: ToolOutcome }) => unknown)[] = [];
+  const beforeSave: ((post: PostSnapshot) => unknown)[] = [];
   let post: PostSnapshot | null = null;
 
   const send = (message: WorkerToHost) => port.postMessage(message);
@@ -66,10 +67,26 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
       annotate: (set: string, annotations: Annotation[]) => request("document.annotate", { set, annotations }),
       select: (from: number, to?: number) => request("document.select", { from, ...(to === undefined ? {} : { to }) }),
       save: () => request("document.save", {}),
+      frontMatter: () => request("document.frontMatter", {}),
+      setFrontMatter: (key: string, value: unknown) => request("document.setFrontMatter", { key, value: value === undefined ? null : value }),
+    },
+    /** Runs before each save: return `{ text }` to save different text, `{ block: "reason" }` to stop the save, or nothing. */
+    onBeforeSave(handler: (post: PostSnapshot) => unknown) {
+      beforeSave.push(handler);
+      register({ kind: "hook", spec: { beforeSave: true } });
+      return () => {
+        const i = beforeSave.indexOf(handler);
+        if (i !== -1) beforeSave.splice(i, 1);
+      };
     },
     site: {
       readFile: (path: string) => request("site.readFile", { path }),
+      list: (path = "") => request("site.list", { path }),
+      writeFile: (path: string, text: string, options: { reason?: string } = {}) => request("site.writeFile", { path, text, ...(options.reason ? { reason: options.reason } : {}) }),
       posts: () => request("site.posts", {}),
+    },
+    settings: {
+      get: () => request("settings.get", {}),
     },
     ui: {
       notify: (message: string, level?: "info" | "warning" | "error") => request("ui.notify", { message, level }),
@@ -167,6 +184,15 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
         if (answer !== undefined) result = toOutcome(answer);
       }
       return result;
+    },
+    async beforeSave({ post: saving }) {
+      let current = saving;
+      for (const handler of beforeSave) {
+        const answer = (await handler(current)) as { text?: unknown; block?: unknown } | undefined;
+        if (answer?.block) return { block: String(answer.block) };
+        if (typeof answer?.text === "string") current = { ...current, text: answer.text };
+      }
+      return current.text === saving.text ? undefined : { text: current.text };
     },
     async "panel.message"({ id, message }) {
       for (const handler of panelHandlers.get(id) ?? []) await handler(message);

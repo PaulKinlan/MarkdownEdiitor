@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fitPost, OnDeviceConnection, onDeviceModels, parseResponse, proseOnly } from "../src/lib/on-device";
 import { collectChanges } from "../src/lib/file-watcher";
-import { applyDictionary, parseWordList, siteWords } from "../src/lib/spelling";
-import { editorTools, registerEditorTools, type EditorToolHost } from "../src/lib/webmcp";
+import { applyDictionary, parseWordList, siteWords } from "../src/modules/spelling/spelling";
+import { editorTools, registerEditorTools, type EditorToolHost } from "../src/modules/webmcp/webmcp";
 import type { PostSummary } from "../src/lib/posts";
 import type { PostContext } from "../src/shared/protocol";
 

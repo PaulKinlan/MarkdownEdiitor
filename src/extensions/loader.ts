@@ -2,7 +2,7 @@
 // author can see what it asks for before any of its code runs.
 
 import { EXTENSION_ID } from "../shared/extensions";
-import { PERMISSIONS, type ExtensionManifest, type ExtensionRecord, type Permission } from "./types";
+import { PERMISSIONS, type ExtensionManifest, type ExtensionRecord, type Permission, type SettingSpec } from "./types";
 
 const MAX_SOURCE = 512 * 1024;
 
@@ -37,8 +37,35 @@ export function checkManifest(value: unknown): ExtensionManifest {
     ...(typeof m.description === "string" ? { description: m.description.slice(0, 300) } : {}),
     ...(typeof m.version === "string" ? { version: m.version.slice(0, 20) } : {}),
     ...(m.enabledByDefault === false ? { enabledByDefault: false } : {}),
+    ...(typeof m.order === "number" && Number.isFinite(m.order) ? { order: m.order } : {}),
+    ...(m.settings === undefined ? {} : { settings: checkSettings(m.settings) }),
     permissions: [...new Set(permissions as Permission[])],
   };
+}
+
+const MAX_SETTINGS = 30;
+
+/** `settings`: up to 30 fields, each `{ type: "string" | "number" | "boolean", title?, description?, default?, enum? }`. */
+function checkSettings(value: unknown): Record<string, SettingSpec> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("manifest.settings must be an object of fields.");
+  const entries = Object.entries(value as Record<string, Partial<SettingSpec>>);
+  if (entries.length > MAX_SETTINGS) throw new Error(`manifest.settings has more than ${MAX_SETTINGS} fields.`);
+  const out: Record<string, SettingSpec> = {};
+  for (const [key, spec] of entries) {
+    if (!/^[A-Za-z][\w-]{0,63}$/.test(key)) throw new Error(`Setting name ${JSON.stringify(key)} must be letters, digits, _ and -.`);
+    if (!spec || !["string", "number", "boolean"].includes(spec.type as string)) throw new Error(`Setting ${key} needs a type: "string", "number" or "boolean".`);
+    const type = spec.type as SettingSpec["type"];
+    if (spec.default !== undefined && typeof spec.default !== type) throw new Error(`Setting ${key}'s default isn't a ${type}.`);
+    const choices = Array.isArray(spec.enum) && type === "string" ? spec.enum.map(String).slice(0, 50) : undefined;
+    out[key] = {
+      type,
+      ...(typeof spec.title === "string" ? { title: spec.title.slice(0, 80) } : {}),
+      ...(typeof spec.description === "string" ? { description: spec.description.slice(0, 300) } : {}),
+      ...(spec.default !== undefined ? { default: spec.default } : {}),
+      ...(choices?.length ? { enum: choices } : {}),
+    };
+  }
+  return out;
 }
 
 /** Index of the brace closing the one at `open`, skipping strings, template literals and comments. */
