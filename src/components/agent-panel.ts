@@ -4,6 +4,7 @@ import type { ChatItem, Edit, ModelInfo } from "../shared/protocol";
 import { editDecisions, type AgentLink } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, loadCustomActions, saveCustomActions, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
+import { skillPrompt, skillTitle, type Skill } from "../shared/skills";
 import { controls, lightDismiss } from "./shared";
 import { icon } from "./icons";
 
@@ -27,6 +28,9 @@ export class AgentPanel extends LitElement {
       .dot.closed { background: var(--danger); }
       .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
       .actions button { min-height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
+      .actions + .actions { padding-top: 0; margin-top: -1px; }
+      .actions .kind { font-size: 11px; color: var(--fg-2); align-self: center; min-width: 3.2em; }
+      .actions button.skill .icon { width: 12px; height: 12px; color: var(--accent); }
       .log { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
       .msg { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
       .user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); padding: 7px 12px; border-radius: 14px 14px 4px 14px; max-width: 85%; }
@@ -70,6 +74,8 @@ export class AgentPanel extends LitElement {
   @property({ attribute: false }) models: ModelInfo[] = [];
   @property() model = "";
   @property() configError = "";
+  /** Built-in skills plus the site's own, run with one click. */
+  @property({ attribute: false }) skills: Skill[] = [];
 
   @state() private actions: EditAction[] = [...BUILTIN_ACTIONS, ...loadCustomActions()];
   @state() private error = "";
@@ -263,14 +269,30 @@ export class AgentPanel extends LitElement {
           ? html`<button @click=${() => this.connection?.abort()}>${icon("stop")} Stop</button>`
           : html`<button class="ghost" title="Start a new conversation" ?disabled=${!view?.items.length} @click=${() => this.connection?.reset()}>New chat</button>`}
       </div>
-      <div class="actions">
+      <div class="actions" role="group" aria-label="Edits">
+        <span class="kind">Edits</span>
         ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${a.prompt} @click=${() => this.send(a.prompt, a.name)}>${a.name}</button>`)}
         <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
+      ${this.skills.length
+        ? html`<div class="actions" role="group" aria-label="Skills">
+            <span class="kind">Skills</span>
+            ${this.skills.map(
+              (s) => html`<button
+                class="skill"
+                ?disabled=${busy || !this.connection}
+                title=${`${s.description}${s.source === "site" ? " (from the site folder)" : ""}`}
+                @click=${() => this.send(skillPrompt(s), skillTitle(s))}
+              >
+                ${icon("sparkles")} ${skillTitle(s)}
+              </button>`,
+            )}
+          </div>`
+        : nothing}
       <div class="log" aria-live="polite">
         ${this.configError ? html`<div class="empty error">${this.configError}</div>` : nothing}
         ${!view?.items.length && !this.configError
-          ? html`<div class="empty">${icon("sparkles")}<span>Ask about this post, or run an edit above. Changes come back as suggestions you accept or reject.</span></div>`
+          ? html`<div class="empty">${icon("sparkles")}<span>Ask about this post, or run an edit or skill above. Changes come back as suggestions you accept or reject.</span></div>`
           : nothing}
         ${view?.items.map((item) => this.renderItem(item))}
         ${view?.partial ? html`<div class="msg assistant partial">${view.partial}</div>` : nothing}

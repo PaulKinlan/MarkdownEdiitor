@@ -19,9 +19,11 @@ A markdown editor for Hugo blogs (built for [aifoc.us](https://aifoc.us) and [pa
 The **Assistant** tab next to the preview opens an agent conversation about the open post. Each post has its own conversation, kept in an `AgentSession` Durable Object built on [Pi Durable](https://earendil.com/posts/pi-durable/). It survives reloads, deploys and evictions, and picks up where it left off.
 
 - **Models.** Any provider with a key on the Worker shows up in the model picker: Anthropic, DeepSeek, OpenAI, Google, OpenRouter. The choice is per browser and can change mid-conversation.
-- **Edits.** One-click passes: Proofread, Tighten, Check site rules, Title ideas, Suggest links, Interactive ideas, Fact check, Write summary. "+ Your edits" saves your own instructions as more buttons.
+- **Edits.** One-click passes: Proofread, Tighten, Check site rules, Title ideas, Suggest links, Write summary. "+ Your edits" saves your own instructions as more buttons.
+- **Skills.** Bigger, multi-step tasks the agent loads when it needs them, also one click away: Fact check, Link my posts (internal links and tags), Build a demo (inline demos and infographics, embedded the way the site already does it), SEO and social, Editor's critique, Check web APIs (Chrome Status, webstatus.dev, MDN), and Check the data. The agent sees every skill's name and description and reads the full instructions with `load_skill`, so you can also just ask ("fact check the second section").
+- **Your own skills.** Put a `SKILL.md` in `.agents/skills/<name>/` or `.claude/skills/<name>/` in the site folder, the same layout coding agents use. It has YAML front matter with `name` and `description` (and optionally `title` for the button and `scope`: `post`, `site` or `both`), then the instructions in markdown. A site skill with a built-in skill's name replaces it.
 - **Suggestions, not rewrites.** The agent changes the post only through `propose_edits`, find/replace pairs checked against the current text. Each one shows as a word diff to accept or reject. Accepted body edits go through the editor, so Ctrl/⌘+Z undoes them. Nothing is written to disk until you save.
-- **Tools.** `read_post` and `propose_edits`. `search_posts` and `read_past_post` work over a full-text index of the site, kept in a per-site `SiteIndex` Durable Object that the editor syncs, uploading only changed files. `web_search` (Brave or Tavily) and `fetch_url` are available when a search key is set.
+- **Tools.** `read_post` and `propose_edits`. `search_posts` and `read_past_post` work over a full-text index of the site, kept in a per-site `SiteIndex` Durable Object that the editor syncs, uploading only changed files. `web_search` (Brave or Tavily) and `fetch_url` are available when a search key is set. For skills: `analyze_post` (length, outline, long sentences, vague links, missing alt text, front matter lengths), `calculate` (exact arithmetic), `table_stats` (column statistics for a markdown table or CSV) and `browser_support` (Chrome Status and webstatus.dev).
 - **Site rules.** A `CLAUDE.md` or `AGENTS.md` at the site root (aifoc.us has one) is sent as the site's writing rules and goes into the agent's system prompt.
 
 ### Agent configuration
@@ -112,6 +114,9 @@ src/lib/sites.ts         Persisted directory handles and permissions
 src/components/          Lit elements: app shell, editor, front matter form, preview
 src/lib/agent-client.ts  WebSocket client for agent sessions, settings
 src/lib/actions.ts       Built-in and custom edits
+src/lib/site-skills.ts   Loads SKILL.md files from the site folder
+src/shared/skills.ts     The skill format (SKILL.md parsing, merging, scopes)
+src/shared/builtin-skills.ts  The built-in skills
 src/lib/indexer.ts       Syncs the site's posts to the search index
 src/lib/pwa.ts           Service worker registration and updates, file/share/shortcut launches
 src/sw/service-worker.ts Service worker (built to dist/sw.js by the plugin in vite.config.ts)
@@ -120,6 +125,9 @@ src/shared/protocol.ts   Messages between the editor and agent sessions
 worker/index.ts          Cloudflare Worker: app assets and /api routes
 worker/agent/session.ts  AgentSession Durable Object (Pi Durable harness per post)
 worker/agent/writing.ts  The writing extension: tools and system prompt sections
+worker/agent/skills.ts   The skills extension: skill catalog section and load_skill
+worker/agent/research.ts calculate, table_stats and browser_support
+worker/agent/post-stats.ts  analyze_post
 worker/agent/site-index.ts  SiteIndex Durable Object (SQLite FTS5 over past posts)
 ```
 

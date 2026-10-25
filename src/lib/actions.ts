@@ -1,6 +1,7 @@
 // "Edits" are saved prompts the assistant runs against the open post. The
 // built-in ones cover common editing passes; authors add their own in the
-// Assistant panel, and those are stored in this browser.
+// Assistant panel, and those are stored in this browser. Bigger, multi-step
+// tasks (fact checking, demos, SEO) are skills: see shared/builtin-skills.ts.
 
 export interface EditAction {
   id: string;
@@ -34,16 +35,6 @@ export const BUILTIN_ACTIONS: EditAction[] = [
     id: "links",
     name: "Suggest links",
     prompt: "Find places that should link to a primary source (spec, docs, paper, repo, announcement) or to one of my past posts (use search_posts). Verify sources with web search where you can. Propose the links as edits that turn existing words into markdown links.",
-  },
-  {
-    id: "interactive",
-    name: "Interactive ideas",
-    prompt: "Suggest 3 to 5 interactive elements (small demos, calculators, charts, timelines, comparisons) that would help a reader understand or test the post's argument. For each, say where it goes, the question it answers, and roughly how it works. Do not propose edits.",
-  },
-  {
-    id: "factcheck",
-    name: "Fact check",
-    prompt: "List the post's factual claims (numbers, dates, quotes, product behaviour). Check each with web search and fetch_url. Report what is confirmed, wrong, or unverifiable with sources, and propose edits only for claims that are wrong.",
   },
   {
     id: "summary",
