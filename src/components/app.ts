@@ -3,7 +3,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
 import { readHugoConfig, listShortcodes, isContentFile, type HugoConfig } from "../lib/hugo";
-import { getFile, writeFile, exists, readText } from "../lib/fs";
+import { getDir, getFile, writeFile, exists, readText } from "../lib/fs";
 import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise, sortPosts, type PostSummary } from "../lib/posts";
 import { isNotePath, NOTES_DIR } from "../shared/notes";
 import { findExistingSite, hasPermission, loadSites, requestPermission, saveSites, type SiteRecord } from "../lib/sites";
@@ -16,7 +16,7 @@ import { controls, lightDismiss } from "./shared";
 import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import { ExtensionController } from "../extensions/controller";
-import type { PostSnapshot } from "../extensions/types";
+import type { PostSnapshot, SiteEntry } from "../extensions/types";
 import type { MdEditor, BodyAnnotation } from "./md-editor";
 import type { ExtensionsDialog } from "./extensions-dialog";
 import "./md-editor";
@@ -247,6 +247,25 @@ export class MdApp extends LitElement {
       if (!this.site || !clean || clean.split("/").some((part) => part === ".." || part === ".git")) return null;
       return (await readText(this.site.handle, clean).catch(() => undefined)) ?? null;
     },
+    listSiteDir: async (path) => {
+      if (!this.site) return null;
+      const dir = await getDir(this.site.handle, path).catch(() => undefined);
+      if (!dir) return null;
+      const entries: SiteEntry[] = [];
+      for await (const entry of dir.values()) if (!entry.name.startsWith(".git")) entries.push({ name: entry.name, kind: entry.kind });
+      return entries.sort((a, b) => a.name.localeCompare(b.name));
+    },
+    writeSiteFile: (path, text) => this.writeSiteFile(path, text),
+    frontMatter: () => (this.open ? structuredClone(this.open.post.frontMatter) : null),
+    setFrontMatter: (key, value) => {
+      if (!this.open) return false;
+      this.open.post.set(key, value);
+      this.text = this.open.post.toString();
+      // Recreate the front matter form so it shows the new value.
+      this.loadCount++;
+      this.requestUpdate();
+      return true;
+    },
     select: (from, to) => {
       if (!this.open || !this.editor) return false;
       const bodyStart = this.text.length - this.open.post.body.length;
@@ -377,6 +396,7 @@ export class MdApp extends LitElement {
     }
     const openPath = this.open?.summary.path;
     if (rescan || (openPath && [...changes.paths].some((p) => openPath === p || openPath.startsWith(`${p}/`)))) await this.checkOpenPost();
+    this.extensions.filesChanged(changes.paths, changes.rescan);
   }
 
   /** Re-reads the given content files, adding, updating or dropping them in the post list. */
@@ -441,6 +461,7 @@ export class MdApp extends LitElement {
 
   private async selectSite(site: SiteRecord, gesture = true) {
     if (!(await this.confirmDiscard())) return;
+    if (this.site && this.site.id !== site.id) this.extensions.siteClosed();
     this.site = site;
     if (this.open) this.extensions.postClosed();
     this.open = undefined;
@@ -480,7 +501,7 @@ export class MdApp extends LitElement {
       this.notes = notes;
       this.shortcodes = shortcodes;
       void this.watch(site);
-      void this.extensions.load({ id: site.id, handle: site.handle });
+      void this.extensions.load({ id: site.id, name: site.name, handle: site.handle });
     } catch (e) {
       if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -568,6 +589,7 @@ export class MdApp extends LitElement {
     this.settingsDialog?.close();
     this.stopWatching?.();
     this.stopWatching = undefined;
+    this.extensions.siteClosed();
     this.site = undefined;
     this.open = undefined;
     this.text = "";
@@ -647,13 +669,32 @@ export class MdApp extends LitElement {
   private async saveNow() {
     // Capture what is being saved: the user can keep typing, or switch post or site, while the write is pending.
     const { open, site, config } = this;
-    const text = this.text;
+    let text = this.text;
     if (!open || !site || !config || text === open.savedText) return;
     const { path } = open.summary;
     try {
       const onDisk = await (await getFile(site.handle, path))?.getFile();
       if (onDisk && (await onDisk.text()) !== open.savedText && !confirm(`${path} changed on disk since you opened it. Overwrite?`)) {
         return;
+      }
+      // Extensions' save hooks can change what's saved (say, set lastmod) or stop the save.
+      const snapshot = this.extensionSnapshot();
+      if (snapshot && this.open === open) {
+        const hooked = await this.extensions.beforeSave({ ...snapshot, text });
+        if (hooked.blocked) {
+          this.error = `Not saved: ${hooked.blocked}`;
+          return;
+        }
+        if (hooked.text !== text) {
+          const post = Post.parse(hooked.text);
+          // Shown in the editor too, unless the author kept typing while the hooks ran.
+          if (this.open === open && this.text === text) {
+            open.post = post;
+            this.text = hooked.text;
+            this.loadCount++;
+          }
+          text = hooked.text;
+        }
       }
       let file: File;
       this.writing++;

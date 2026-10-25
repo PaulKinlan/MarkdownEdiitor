@@ -10,7 +10,12 @@ export interface Methods {
   "document.annotate": { params: { set: string; annotations: import("./types").Annotation[] }; result: void };
   "document.select": { params: { from: number; to?: number }; result: boolean };
   "document.save": { params: Record<string, never>; result: boolean };
+  "document.frontMatter": { params: Record<string, never>; result: Record<string, unknown> | null };
+  "document.setFrontMatter": { params: { key: string; value: unknown }; result: boolean };
   "site.readFile": { params: { path: string }; result: string | null };
+  "site.list": { params: { path: string }; result: import("./types").SiteEntry[] | null };
+  "site.writeFile": { params: { path: string; text: string; reason?: string }; result: boolean };
+  "settings.get": { params: Record<string, never>; result: import("./types").SettingValues };
   "site.posts": { params: Record<string, never>; result: import("./types").SitePost[] };
   "ui.notify": { params: { message: string; level?: "info" | "warning" | "error" }; result: void };
   "ui.confirm": { params: { title: string; message?: string }; result: boolean };
@@ -42,7 +47,7 @@ export type Registration =
   | { kind: "skill"; spec: import("./types").SkillSpec }
   | { kind: "edit"; spec: import("./types").QuickEditSpec }
   | { kind: "section"; spec: { name: string; text: string } }
-  | { kind: "hook"; spec: { beforeTool?: boolean; afterTool?: boolean } };
+  | { kind: "hook"; spec: { beforeTool?: boolean; afterTool?: boolean; beforeSave?: boolean } };
 
 export const METHOD_PERMISSIONS: Record<Method, Permission[]> = {
   "document.read": ["post:read"],
@@ -51,7 +56,12 @@ export const METHOD_PERMISSIONS: Record<Method, Permission[]> = {
   "document.annotate": ["post:read", "ui"],
   "document.select": ["post:read", "ui"],
   "document.save": ["post:write"],
+  "document.frontMatter": ["post:read"],
+  "document.setFrontMatter": ["post:write"],
   "site.readFile": ["site:read"],
+  "site.list": ["site:read"],
+  "site.writeFile": ["site:write"],
+  "settings.get": [],
   "site.posts": ["site:read"],
   "ui.notify": ["ui"],
   "ui.confirm": ["ui"],
@@ -81,7 +91,8 @@ export const REGISTRATION_PERMISSIONS: Record<Registration["kind"], Permission[]
   skill: ["agent"],
   edit: ["agent"],
   section: ["agent"],
-  hook: ["agent:hooks"],
+  // Narrowed per hook in the host: tool hooks need "agent:hooks", the save hook "post:write".
+  hook: [],
 };
 
 /** What the host asks the worker to run. */
@@ -91,6 +102,7 @@ export interface Invocations {
   button: { params: { id: string }; result: void };
   beforeTool: { params: { tool: string; args: unknown }; result: { block?: string; args?: Record<string, unknown> } | undefined };
   afterTool: { params: { tool: string; args: unknown; result: import("./types").ToolOutcome }; result: import("./types").ToolOutcome | undefined };
+  beforeSave: { params: { post: import("./types").PostSnapshot }; result: { text?: string; block?: string } | undefined };
   "panel.message": { params: { id: string; message: unknown }; result: void };
 }
 

@@ -2,17 +2,23 @@
 // into the host, and the host's agent contributions into the assistant's
 // connection. The app renders what `host` exposes.
 
+import { get as idbGet, set as idbSet } from "idb-keyval";
 import type { AgentLink, AgentSettings } from "../lib/agent-client";
 import { ExtensionHost, type HostBridge } from "./host";
 import { approve, install, listExtensions, setEnabled, syncLibrary, uninstall, type LibraryEntry } from "./library";
 import { parseExtension } from "./loader";
-import { PERMISSIONS, type PostSnapshot, type SitePost } from "./types";
+import { PERMISSIONS, type PostSnapshot, type SettingValues, type SiteEntry, type SitePost } from "./types";
 
 export interface AppHooks {
   snapshot(): PostSnapshot | undefined;
   applyEdits(edits: { find: string; replace: string }[]): { applied: number; problems: string[] };
   insert(text: string): boolean;
   readSiteFile(path: string): Promise<string | null>;
+  listSiteDir(path: string): Promise<SiteEntry[] | null>;
+  /** Writes a file in the site (not the open post) and refreshes the lists. */
+  writeSiteFile(path: string, text: string): Promise<void>;
+  frontMatter(): Record<string, unknown> | null;
+  setFrontMatter(key: string, value: unknown): boolean;
   select(from: number, to: number): boolean;
   /** Saves the open post; resolves false if there was nothing to save or it failed. */
   save(): Promise<boolean>;
@@ -29,7 +35,7 @@ const SELECTION_DELAY_MS = 150;
 export class ExtensionController extends EventTarget {
   readonly host: ExtensionHost;
   entries: LibraryEntry[] = [];
-  private site?: { id: string; handle: FileSystemDirectoryHandle };
+  private site?: { id: string; name: string; handle: FileSystemDirectoryHandle };
   private changeTimer?: ReturnType<typeof setTimeout>;
   private selectionTimer?: ReturnType<typeof setTimeout>;
   private connection?: AgentLink;
@@ -45,6 +51,10 @@ export class ExtensionController extends EventTarget {
       applyEdits: (edits) => app.applyEdits(edits),
       insert: (text) => app.insert(text),
       readSiteFile: (path) => app.readSiteFile(path),
+      listSiteDir: (path) => app.listSiteDir(sitePath(path, { root: true })),
+      writeSiteFile: (request) => this.writeSiteFile(request),
+      frontMatter: () => app.frontMatter(),
+      setFrontMatter: (key, value) => app.setFrontMatter(key, value),
       select: (from, to) => app.select(from, to),
       sitePosts: () => app.sitePosts(),
       save: () => app.save(),
@@ -70,7 +80,8 @@ export class ExtensionController extends EventTarget {
   }
 
   /** Loads the library for this site (or none) and runs what is enabled. */
-  async load(site?: { id: string; handle: FileSystemDirectoryHandle }) {
+  async load(site?: { id: string; name: string; handle: FileSystemDirectoryHandle }) {
+    const opened = site && site.id !== this.site?.id;
     this.site = site;
     const generation = ++this.generation;
     const entries = await listExtensions(site).catch((e) => {
@@ -80,6 +91,7 @@ export class ExtensionController extends EventTarget {
     if (generation !== this.generation) return;
     this.entries = entries;
     await this.host.run(entries.filter((e) => e.enabled && !e.error));
+    if (opened) this.host.emit("site:open", { id: site.id, name: site.name });
     this.dispatchEvent(new Event("change"));
   }
 
@@ -95,6 +107,30 @@ export class ExtensionController extends EventTarget {
   }
 
   // ---- Editor events --------------------------------------------------------------
+
+  siteClosed() {
+    if (!this.site) return;
+    this.site = undefined;
+    this.host.emit("site:close", null);
+  }
+
+  /** Files changed in the site folder outside the editor (git, another app). */
+  filesChanged(paths: Iterable<string>, rescan = false) {
+    this.host.emit("site:files-changed", { paths: [...paths].slice(0, 1000), rescan });
+  }
+
+  /** Runs extensions' save hooks; see ExtensionHost.beforeSave. */
+  beforeSave(post: PostSnapshot) {
+    return this.host.beforeSave(post);
+  }
+
+  settings(id: string): Promise<SettingValues> {
+    return this.host.settings(id);
+  }
+
+  setSettings(id: string, values: SettingValues) {
+    return this.host.setSettings(id, values);
+  }
 
   postOpened() {
     clearTimeout(this.changeTimer);
@@ -222,6 +258,122 @@ export class ExtensionController extends EventTarget {
     window.removeEventListener("message", this.host.onWindowMessage);
     this.host.stopAll();
   }
+
+  // ---- Site writes ----------------------------------------------------------------------
+
+  /**
+   * An extension's write to the site folder. The author reviews each one,
+   * unless they've let this extension write in that folder without asking.
+   * Extensions can't write the open post (that goes through document edits),
+   * git's files, or .editor/ (where extensions and their approvals live).
+   */
+  private async writeSiteFile({ extension, path: requested, text, reason }: { extension: { id: string; name: string }; path: string; text: string; reason?: string }): Promise<boolean> {
+    const site = this.site;
+    if (!site) throw new Error("No site is open.");
+    const path = sitePath(requested);
+    if (path === this.app.snapshot()?.path) throw new Error(`${path} is open in the editor; change it with editor.document.applyEdits.`);
+    if (text.length > MAX_WRITE) throw new Error(`The file is over ${MAX_WRITE / 1024 / 1024} MB.`);
+    const current = await this.app.readSiteFile(path);
+    if (current === text) return true;
+    const key = `extension-writes:${site.id}:${extension.id}`;
+    const allowed = ((await idbGet(key)) ?? []) as string[];
+    if (!allowed.some((folder) => path.startsWith(`${folder}/`))) {
+      const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined;
+      const answer = await reviewWrite({ name: extension.name, path, before: current, after: text, reason, folder });
+      if (!answer.accept) return false;
+      if (answer.allowFolder && folder) await idbSet(key, [...allowed, folder]);
+    }
+    if (this.site !== site) return false;
+    await this.app.writeSiteFile(path, text);
+    this.filesChanged([path]);
+    return true;
+  }
+}
+
+const MAX_WRITE = 5 * 1024 * 1024;
+
+/** A path from the site root that extensions may use: no leading slash, no . or .. segments, nothing in .git or .editor. */
+export function sitePath(path: string, options: { root?: boolean } = {}): string {
+  const clean = path.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+  const parts = clean.split("/");
+  if (!clean) {
+    if (options.root) return "";
+    throw new Error("A file path from the site root is needed, e.g. static/demos/chart.html.");
+  }
+  if (clean.length > 512 || parts.some((p) => !p || p === "." || p === "..")) throw new Error(`${path} isn't a plain path from the site root.`);
+  if (parts.some((p) => p === ".git" || p.startsWith(".git")) || parts[0] === ".editor") throw new Error(`Extensions can't touch ${path}.`);
+  return clean;
+}
+
+/** The lines that changed, as a short +/- listing: what's between the common first and last lines. */
+export function changedLines(before: string, after: string, max = 80): { added: number; removed: number; listing: string } {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  const removed = a.slice(start, a.length - end);
+  const added = b.slice(start, b.length - end);
+  const lines = [...removed.map((l) => `- ${l}`), ...added.map((l) => `+ ${l}`)];
+  const listing = lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`].join("\n") : lines.join("\n");
+  return { added: added.length, removed: removed.length, listing: start ? `@@ line ${start + 1}\n${listing}` : listing };
+}
+
+/** Shows an extension's proposed file write; resolves with the author's answer. */
+function reviewWrite(change: { name: string; path: string; before: string | null; after: string; reason?: string; folder?: string }): Promise<{ accept: boolean; allowFolder: boolean }> {
+  return new Promise((resolve) => {
+    const creating = change.before === null;
+    const dialog = document.createElement("dialog");
+    dialog.style.cssText = "background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:12px;padding:16px;width:min(680px,92vw)";
+    const heading = document.createElement("h3");
+    heading.style.margin = "0 0 8px";
+    heading.textContent = `${change.name} wants to ${creating ? "create" : "change"} ${change.path}`;
+    const parts: HTMLElement[] = [heading];
+    if (change.reason) {
+      const why = document.createElement("p");
+      why.textContent = change.reason;
+      parts.push(why);
+    }
+    const summary = document.createElement("p");
+    summary.style.cssText = "color:var(--fg-2);margin:4px 0";
+    const diff = creating ? undefined : changedLines(change.before!, change.after);
+    const newLines = change.after.replace(/\n$/, "").split("\n");
+    summary.textContent = diff ? `${diff.added} line(s) added, ${diff.removed} removed.` : `A new file of ${newLines.length} line(s).`;
+    const pre = document.createElement("pre");
+    pre.style.cssText = "max-height:45vh;overflow:auto;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:8px;font:12px/1.45 var(--mono);white-space:pre-wrap";
+    pre.textContent = diff ? diff.listing : newLines.slice(0, 80).join("\n") + (newLines.length > 80 ? `\n… ${newLines.length - 80} more lines` : "");
+    parts.push(summary, pre);
+    const allow = document.createElement("input");
+    allow.type = "checkbox";
+    if (change.folder) {
+      const label = document.createElement("label");
+      label.style.cssText = "display:flex;gap:6px;align-items:center;margin:8px 0";
+      label.replaceChildren(allow, `Let ${change.name} write in ${change.folder}/ in this site without asking`);
+      parts.push(label);
+    }
+    const buttons = document.createElement("div");
+    buttons.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:8px";
+    let accept = false;
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.textContent = "Don't write";
+    reject.onclick = () => dialog.close();
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "primary";
+    ok.textContent = creating ? "Create file" : "Write changes";
+    ok.onclick = () => ((accept = true), dialog.close());
+    buttons.replaceChildren(reject, ok);
+    parts.push(buttons);
+    dialog.replaceChildren(...parts);
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve({ accept, allowFolder: accept && allow.checked });
+    });
+    document.body.appendChild(dialog);
+    dialog.showModal();
+  });
 }
 
 /** A small modal list to choose from; resolves with the choice or null. */

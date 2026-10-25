@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { ExtensionController } from "../extensions/controller";
 import { fetchSource, SITE_EXTENSIONS_DIR, type LibraryEntry } from "../extensions/library";
-import { PERMISSIONS } from "../extensions/types";
+import { PERMISSIONS, type SettingSpec, type SettingValues } from "../extensions/types";
 import { controls, lightDismiss } from "./shared";
 
 const ORIGINS = { builtin: "Built in", site: "This site", installed: "Installed" };
@@ -29,6 +29,10 @@ export class ExtensionsDialog extends LitElement {
       .status { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-2); }
       .status.running { background: var(--ok); }
       .status.failed { background: var(--danger); }
+      .settings { display: grid; gap: 8px; padding: 6px 0 2px; }
+      .settings label { display: grid; gap: 4px; font-size: 13px; }
+      .settings label.check { display: flex; align-items: center; gap: 6px; }
+      .settings .hint { font-size: 12px; color: var(--fg-2); }
     `,
   ];
 
@@ -36,6 +40,8 @@ export class ExtensionsDialog extends LitElement {
   @state() private url = "";
   @state() private error = "";
   @state() private busy = false;
+  /** Each extension's settings, loaded when its Settings section opens. */
+  @state() private values: Record<string, SettingValues> = {};
   @query("dialog") private dialog?: HTMLDialogElement;
   @query("input[type=file]") private fileInput?: HTMLInputElement;
 
@@ -115,8 +121,44 @@ export class ExtensionsDialog extends LitElement {
       <div class="perms">${e.manifest.permissions.length ? e.manifest.permissions.map((p) => PERMISSIONS[p]).join(" · ") : "No permissions"}${e.from ? html` · <code>${e.from}</code>` : nothing}</div>
       ${e.unapproved.length && !e.error ? html`<div class="waiting">Waiting for your OK to: ${e.unapproved.map((p) => PERMISSIONS[p].toLowerCase()).join(", ")}.</div>` : nothing}
       ${e.error || (e.enabled && status.error) ? html`<div class="error">${e.error || status.error}</div>` : nothing}
+      ${e.manifest.settings && e.enabled && status.status === "running" ? this.renderSettings(e.manifest.id, e.manifest.settings) : nothing}
       ${e.enabled && status.logs.length ? html`<details><summary class="perms">${status.logs.length} message(s)</summary><div class="error">${status.logs.join("\n\n")}</div></details>` : nothing}
     </div>`;
+  }
+
+  private renderSettings(id: string, specs: Record<string, SettingSpec>) {
+    const values = this.values[id];
+    const set = (key: string, value: string | number | boolean) => {
+      const next = { ...values, [key]: value };
+      this.values = { ...this.values, [id]: next };
+      void this.run(() => this.controller!.setSettings(id, next));
+    };
+    const field = (key: string, spec: SettingSpec) => {
+      const title = spec.title ?? key;
+      const hint = spec.description ? html`<span class="hint">${spec.description}</span>` : nothing;
+      const value = values?.[key];
+      if (spec.type === "boolean") {
+        return html`<label class="check"><input type="checkbox" .checked=${value === true} @change=${(ev: Event) => set(key, (ev.target as HTMLInputElement).checked)} /> ${title} ${hint}</label>`;
+      }
+      if (spec.enum) {
+        return html`<label>${title}
+          <select @change=${(ev: Event) => set(key, (ev.target as HTMLSelectElement).value)}>
+            ${spec.enum.map((choice) => html`<option ?selected=${value === choice}>${choice}</option>`)}
+          </select>${hint}</label>`;
+      }
+      const number = spec.type === "number";
+      return html`<label>${title}
+        <input type=${number ? "number" : "text"} .value=${value === undefined ? "" : String(value)} @change=${(ev: Event) => {
+          const raw = (ev.target as HTMLInputElement).value;
+          if (number ? raw !== "" && Number.isFinite(Number(raw)) : true) set(key, number ? Number(raw) : raw);
+        }} />${hint}</label>`;
+    };
+    return html`<details @toggle=${async (ev: Event) => {
+      if ((ev.target as HTMLDetailsElement).open && !this.values[id]) this.values = { ...this.values, [id]: await this.controller!.settings(id) };
+    }}>
+      <summary class="perms">Settings</summary>
+      <div class="settings">${values ? Object.entries(specs).map(([key, spec]) => field(key, spec)) : html`<span class="hint">Loading…</span>`}</div>
+    </details>`;
   }
 
   render() {
