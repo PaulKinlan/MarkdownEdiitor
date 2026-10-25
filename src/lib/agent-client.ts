@@ -67,13 +67,30 @@ export function editDecisions(id: string): Map<string, string> {
   return map;
 }
 
-type ViewMessage = Extract<ServerToClient, { type: "view" }>;
+export type ViewMessage = Extract<ServerToClient, { type: "view" }>;
+
+/**
+ * A conversation about one post, as the assistant panel sees it. It is either
+ * a WebSocket to an agent session on the server, or a model running in the
+ * browser (see on-device.ts). Emits `change` when `view` or `status` changes,
+ * and `error` with a message.
+ */
+export interface AgentLink extends EventTarget {
+  readonly id: string;
+  readonly view?: ViewMessage;
+  readonly status: "connecting" | "open" | "closed";
+  updatePost(post: PostContext): void;
+  prompt(text: string, model: { provider: string; modelId: string }, label?: string): void;
+  abort(): void;
+  reset(): void;
+  close(): void;
+}
 
 /**
  * A WebSocket to one AgentSession. Reconnects with backoff, and re-sends the
  * post context on every (re)connect, since the session may have been evicted.
  */
-export class AgentConnection extends EventTarget {
+export class AgentConnection extends EventTarget implements AgentLink {
   view?: ViewMessage;
   status: "connecting" | "open" | "closed" = "connecting";
   private ws?: WebSocket;

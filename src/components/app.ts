@@ -2,14 +2,19 @@ import { LitElement, css, html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
-import { readHugoConfig, listShortcodes, type HugoConfig } from "../lib/hugo";
+import { readHugoConfig, listShortcodes, isContentFile, type HugoConfig } from "../lib/hugo";
 import { getFile, writeFile, exists, readText } from "../lib/fs";
 import { listPosts, newPostFromTemplate, sections, summarise, sortPosts, type PostSummary } from "../lib/posts";
 import { findExistingSite, hasPermission, loadSites, requestPermission, saveSites, type SiteRecord } from "../lib/sites";
 import { createSampleSite } from "../lib/sample-site";
 import { slugify } from "../lib/slug";
-import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentSettings } from "../lib/agent-client";
+import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentLink, type AgentSettings } from "../lib/agent-client";
 import { syncSiteIndex } from "../lib/indexer";
+import { BUILTIN_ACTIONS, loadCustomActions } from "../lib/actions";
+import { canSummarize, isOnDevice, OnDeviceConnection, onDeviceModels, summarizePost } from "../lib/on-device";
+import { watchFolder, type FolderChanges } from "../lib/file-watcher";
+import { registerEditorTools, type EditorToolHost } from "../lib/webmcp";
+import { applyDictionary, canUseDictionary, parseWordList, siteWords } from "../lib/spelling";
 import type { Edit, ModelInfo, PostContext } from "../shared/protocol";
 import { controls } from "./shared";
 import type { MdEditor } from "./md-editor";
@@ -30,6 +35,7 @@ interface OpenPost {
 const LAST_SITE_KEY = "md-editor:last-site";
 const PREVIEW_KEY = "md-editor:preview-open";
 const TAB_KEY = "md-editor:side-tab";
+const SPELLCHECK_KEY = "md-editor:spellcheck";
 const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
 
 @customElement("md-app")
@@ -107,9 +113,15 @@ export class MdApp extends LitElement {
   @state() private agentSettings: AgentSettings = loadAgentSettings();
   @state() private models: ModelInfo[] = [];
   @state() private agentError = "";
-  @state() private connection?: AgentConnection;
+  @state() private connection?: AgentLink;
   @state() private indexStatus = "";
+  @state() private checkSpelling = localStorage.getItem(SPELLCHECK_KEY) !== "false";
   private siteInstructions = "";
+  private stopWatching?: () => void;
+  private unregisterTools?: () => void;
+  /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
+  private writing = 0;
+  private agentServerUp = false;
 
   @query("md-editor") private editor?: MdEditor;
   @query("preview-pane") private preview?: PreviewPane;
@@ -133,6 +145,7 @@ export class MdApp extends LitElement {
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
     window.addEventListener("keydown", this.onKeydown);
+    this.unregisterTools = registerEditorTools(this.toolHost);
     this.sites = await loadSites();
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
     if (last) await this.selectSite(last, false);
@@ -143,26 +156,83 @@ export class MdApp extends LitElement {
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     window.removeEventListener("focus", this.onFocus);
     window.removeEventListener("keydown", this.onKeydown);
+    this.unregisterTools?.();
+    this.stopWatching?.();
   }
 
   private onBeforeUnload = (e: BeforeUnloadEvent) => {
     if (this.dirty) e.preventDefault();
   };
 
+  /** On focus, catches up with edits made outside the editor when the browser can't watch the folder. */
+  private onFocus = () => void this.checkOpenPost();
+
   /** Picks up edits made outside the editor (another app, git checkout, an agent). */
-  private onFocus = async () => {
+  private async checkOpenPost() {
     const { open, site } = this;
-    if (!open || !site || this.needsPermission) return;
+    if (!open || !site || this.needsPermission || this.writing) return;
     const file = await (await getFile(site.handle, open.summary.path))?.getFile();
+    if (!file) {
+      if (this.open === open) this.error = `${open.summary.path} was moved or deleted on disk. Save to write it back.`;
+      return;
+    }
     // Compare contents, not times: a checkout or sync tool can keep or rewind modification times.
-    if (!file || (await file.text()) === open.savedText || this.open !== open) return;
+    const text = await file.text();
+    if (text === open.savedText || text === this.text || this.open !== open || this.writing) return;
     if (this.dirty) {
       this.changedOnDisk = true;
     } else {
       await this.openPost(this.open.summary, true);
       this.flash("Reloaded: the file changed on disk");
     }
-  };
+  }
+
+  // ---- Watching the folder ---------------------------------------------------
+
+  private async watch(site: SiteRecord) {
+    this.stopWatching?.();
+    this.stopWatching = undefined;
+    const stop = await watchFolder(site.handle, (changes) => void this.onFolderChange(site, changes));
+    if (site === this.site) this.stopWatching = stop;
+    else stop?.();
+  }
+
+  private async onFolderChange(site: SiteRecord, changes: FolderChanges) {
+    const { config } = this;
+    if (site !== this.site || !config || this.needsPermission) return;
+    if (changes.rescan) {
+      const posts = await listPosts(site.handle, config);
+      if (site !== this.site) return;
+      this.posts = posts;
+    } else {
+      const changed = [...changes.paths].filter((p) => p.startsWith(`${config.contentDir}/`) && isContentFile(p));
+      if (changed.length) await this.refreshPosts(site, config, changed);
+    }
+    if (changes.rescan || (this.open && changes.paths.has(this.open.summary.path))) await this.checkOpenPost();
+    if (this.agentServerUp && (changes.rescan || [...changes.paths].some((p) => p.startsWith(config.contentDir)))) void this.syncIndex();
+  }
+
+  /** Re-reads the given content files, adding, updating or dropping them in the post list. */
+  private async refreshPosts(site: SiteRecord, config: HugoConfig, paths: string[]) {
+    const updates = await Promise.all(
+      paths.map(async (path) => {
+        try {
+          const file = await (await getFile(site.handle, path))?.getFile();
+          return { path, summary: file ? summarise(path, config, Post.parse(await file.text()), file.lastModified) : undefined };
+        } catch {
+          return { path, summary: undefined };
+        }
+      }),
+    );
+    if (site !== this.site) return;
+    const byPath = new Map(this.posts.map((p) => [p.path, p]));
+    for (const { path, summary } of updates) {
+      if (summary) byPath.set(path, summary);
+      // Keep the open post in the list even if it vanished: its text is still in the editor.
+      else if (path !== this.open?.summary.path) byPath.delete(path);
+    }
+    this.posts = sortPosts([...byPath.values()]);
+  }
 
   // ---- Sites ---------------------------------------------------------------
 
@@ -206,6 +276,8 @@ export class MdApp extends LitElement {
     this.site = site;
     this.open = undefined;
     this.postGeneration++;
+    this.stopWatching?.();
+    this.stopWatching = undefined;
     this.sectionFilter = "*";
     this.connection?.close();
     this.connection = undefined;
@@ -241,6 +313,7 @@ export class MdApp extends LitElement {
       const rules = await Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f)));
       if (generation !== this.siteGeneration) return;
       this.siteInstructions = rules.filter(Boolean).join("\n\n");
+      void this.watch(site);
       void this.connectAgentServer();
     } catch (e) {
       if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
@@ -263,6 +336,8 @@ export class MdApp extends LitElement {
     this.sites = this.sites.filter((s) => s.id !== this.site!.id);
     await saveSites(this.sites);
     this.settingsDialog?.close();
+    this.stopWatching?.();
+    this.stopWatching = undefined;
     this.site = undefined;
     this.open = undefined;
     this.text = "";
@@ -349,7 +424,13 @@ export class MdApp extends LitElement {
       if (onDisk && (await onDisk.text()) !== open.savedText && !confirm(`${path} changed on disk since you opened it. Overwrite?`)) {
         return;
       }
-      const file = await writeFile(site.handle, path, text);
+      let file: File;
+      this.writing++;
+      try {
+        file = await writeFile(site.handle, path, text);
+      } finally {
+        this.writing--;
+      }
       const updated = summarise(path, config, Post.parse(text), file.lastModified);
       if (site === this.site) {
         this.posts = sortPosts(this.posts.map((p) => (p.path === path ? updated : p)));
@@ -443,20 +524,24 @@ export class MdApp extends LitElement {
 
   /** Loads the model list and brings the site's search index up to date. */
   private async connectAgentServer() {
+    const local = await onDeviceModels();
+    let server: ModelInfo[] = [];
+    let failed = "";
     try {
-      const config = await fetchAgentConfig(this.agentSettings);
-      this.models = config.models;
-      this.agentError = config.models.length ? "" : "The agent server has no model API keys configured.";
-      const saved = this.agentSettings.model;
-      if (!saved || !this.models.some((m) => `${m.provider}/${m.modelId}` === saved)) {
-        const first = this.models.find((m) => m.provider === "anthropic") ?? this.models[0];
-        if (first) this.setModel(`${first.provider}/${first.modelId}`);
-      }
+      server = (await fetchAgentConfig(this.agentSettings)).models;
     } catch (e) {
-      this.models = [];
-      this.agentError = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
-      return;
+      failed = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
     }
+    this.agentServerUp = !failed;
+    this.models = [...server, ...local];
+    this.agentError = this.models.length ? "" : failed || "The agent server has no model API keys configured.";
+    if (failed && local.length) this.indexStatus = `${failed}. The on-device model still works.`;
+    const saved = this.agentSettings.model;
+    if (!saved || !this.models.some((m) => `${m.provider}/${m.modelId}` === saved)) {
+      const first = server.find((m) => m.provider === "anthropic") ?? this.models[0];
+      if (first) this.setModel(`${first.provider}/${first.modelId}`);
+    }
+    if (failed) return;
     this.indexStatus = "Indexing posts for search…";
     await this.syncIndex();
   }
@@ -480,8 +565,11 @@ export class MdApp extends LitElement {
   }
 
   private setModel(model: string) {
+    const switching = isOnDevice(model) !== isOnDevice(this.agentSettings.model);
     this.agentSettings = { ...this.agentSettings, model };
     saveAgentSettings(this.agentSettings);
+    // The on-device model has its own conversation, separate from the server's.
+    if (switching && this.connection) this.openConnection();
   }
 
   private updateAgentSettings(patch: Partial<AgentSettings>) {
@@ -495,7 +583,8 @@ export class MdApp extends LitElement {
     this.connection?.close();
     this.connection = undefined;
     if (!this.open || !this.site) return;
-    this.connection = new AgentConnection(this.agentSettings, sessionId(this.site.id, this.open.summary.path));
+    const id = sessionId(this.site.id, this.open.summary.path);
+    this.connection = isOnDevice(this.agentSettings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.agentSettings, id);
     this.connection.updatePost(this.postContext()!);
   }
 
@@ -511,14 +600,17 @@ export class MdApp extends LitElement {
     };
   }
 
-  /** Applies an accepted suggestion. Body edits go through the editor so they can be undone. */
   private onApplyEdit(e: CustomEvent<{ edit: Edit; done: (ok: boolean) => void }>) {
-    if (!this.open) return e.detail.done(false);
-    const { find, replace } = e.detail.edit;
+    e.detail.done(this.applyEdit(e.detail.edit));
+  }
+
+  /** Applies a find/replace edit. Body edits go through the editor so they can be undone. */
+  private applyEdit({ find, replace }: Edit): boolean {
+    if (!this.open) return false;
     const at = this.text.indexOf(find);
-    if (at === -1 || this.text.indexOf(find, at + 1) !== -1) return e.detail.done(false);
+    if (at === -1 || this.text.indexOf(find, at + 1) !== -1) return false;
     const bodyStart = this.text.length - this.open.post.body.length;
-    if (at >= bodyStart && this.editor?.replaceUnique(find, replace)) return e.detail.done(true);
+    if (at >= bodyStart && this.editor?.replaceUnique(find, replace)) return true;
     const next = this.text.slice(0, at) + replace + this.text.slice(at + find.length);
     try {
       this.open.post = Post.parse(next);
@@ -526,11 +618,59 @@ export class MdApp extends LitElement {
       // Recreate the front matter form so an open raw draft shows the accepted change.
       this.loadCount++;
       this.requestUpdate();
-      e.detail.done(true);
+      return true;
     } catch {
-      e.detail.done(false);
+      return false;
     }
   }
+
+  // ---- Tools for browser agents (WebMCP) ----------------------------------------
+
+  private readonly toolHost: EditorToolHost = {
+    currentPost: () =>
+      this.open && { path: this.open.summary.path, url: this.open.summary.url, title: this.open.summary.title, text: this.text, unsaved: this.dirty },
+    listPosts: (query, limit) => {
+      const q = query.toLowerCase();
+      return this.posts
+        .filter((p) => !q || p.title.toLowerCase().includes(q) || p.path.toLowerCase().includes(q))
+        .slice(0, limit)
+        .map((p) => ({ path: p.path, title: p.title, url: p.url, date: p.date?.toISOString().slice(0, 10), draft: p.draft }));
+    },
+    openPost: async (path) => {
+      const summary = this.posts.find((p) => p.path === path);
+      if (!summary) return `No post at ${path}. Use list_posts for paths.`;
+      await this.openPost(summary);
+      return this.open?.summary.path === path ? undefined : "The post wasn't opened (the author kept their unsaved changes).";
+    },
+    insertText: (text) => {
+      if (!this.open || !this.editor) return "No post is open.";
+      this.editor.insert(text);
+      return undefined;
+    },
+    applyEdits: (edits) => {
+      const problems: string[] = [];
+      let applied = 0;
+      edits.forEach((edit, i) => (this.applyEdit(edit) ? applied++ : problems.push(`Edit ${i + 1}: find text not found exactly once.`)));
+      return { applied, problems };
+    },
+    save: async () => {
+      if (!this.open) return "No post is open.";
+      if (!this.dirty) return "Nothing to save.";
+      await this.save();
+      return this.dirty ? `Not saved${this.error ? `: ${this.error}` : "."}` : `Saved ${this.open.summary.path}.`;
+    },
+    listEdits: () => [...BUILTIN_ACTIONS, ...loadCustomActions()].map((a) => ({ name: a.name, instruction: a.prompt })),
+    runEdit: (name) => {
+      const action = [...BUILTIN_ACTIONS, ...loadCustomActions()].find((a) => a.name.toLowerCase() === name.toLowerCase());
+      if (!action) return `No edit called "${name}". Use list_edits.`;
+      const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
+      if (!this.connection || !provider || !rest.length) return "The assistant isn't ready: open a post and pick a model.";
+      this.connection.prompt(action.prompt, { provider, modelId: rest.join("/") }, action.name);
+      if (!this.showPreview) this.togglePreview();
+      this.setSideTab("assistant");
+      return `Started "${action.name}". Its suggestions will appear in the Assistant panel for the author to review.`;
+    },
+  };
 
   private setSideTab(tab: "preview" | "assistant") {
     this.sideTab = tab;
@@ -539,6 +679,14 @@ export class MdApp extends LitElement {
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
+    if ((changed.has("posts") || changed.has("site")) && canUseDictionary()) {
+      applyDictionary(this.site ? siteWords(this.posts, parseWordList(this.site.words ?? "")) : []);
+    }
+  }
+
+  private setCheckSpelling(on: boolean) {
+    this.checkSpelling = on;
+    localStorage.setItem(SPELLCHECK_KEY, String(on));
   }
 
   // ---- Rendering -------------------------------------------------------------
@@ -648,6 +796,7 @@ export class MdApp extends LitElement {
           .data=${post.frontMatter}
           .raw=${post.rawFrontMatter}
           .format=${post.format}
+          .summarize=${canSummarize() ? (field: string) => summarizePost(this.open!.post.body, this.site!.name, field) : undefined}
           @field-change=${this.onFieldChange}
           @raw-change=${this.onRawChange}
         ></frontmatter-form>`,
@@ -661,7 +810,7 @@ export class MdApp extends LitElement {
             </select>`
           : nothing}
       </div>
-      <md-editor .value=${post.body} @change=${this.onBodyChange} @image-files=${this.onImageFiles}></md-editor>
+      <md-editor .value=${post.body} .checkSpelling=${this.checkSpelling} @change=${this.onBodyChange} @image-files=${this.onImageFiles}></md-editor>
     </main>`;
   }
 
@@ -692,6 +841,20 @@ export class MdApp extends LitElement {
               <label>Preview server
                 <input .value=${this.site.previewOrigin} @change=${(e: Event) => this.updateSite({ previewOrigin: (e.target as HTMLInputElement).value.replace(/\/$/, "") })} />
               </label>
+              <label>Spell check words
+                <textarea
+                  rows="3"
+                  placeholder="Hugo, WebMCP, aifoc.us"
+                  .value=${this.site.words ?? ""}
+                  @change=${(e: Event) => this.updateSite({ words: (e.target as HTMLTextAreaElement).value })}
+                ></textarea>
+              </label>
+              <p class="muted">
+                <label style="display:inline"><input type="checkbox" .checked=${this.checkSpelling} @change=${(e: Event) => this.setCheckSpelling((e.target as HTMLInputElement).checked)} /> Check spelling in the editor</label>.
+                ${canUseDictionary()
+                  ? "These words, and the site's tags and categories, aren't marked as misspelled."
+                  : "Chrome 159 and later stop marking these words, and the site's tags and categories, as misspelled."}
+              </p>
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>

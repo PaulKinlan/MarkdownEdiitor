@@ -1,6 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -89,9 +89,12 @@ export class MdEditor extends LitElement {
 
   @property() value = "";
   @property() placeholderText = "Start writing…";
+  /** Turns on the browser's spell checker for the document. */
+  @property({ type: Boolean }) checkSpelling = true;
 
   private view?: EditorView;
   private applying = false;
+  private spelling = new Compartment();
 
   firstUpdated() {
     this.view = new EditorView({
@@ -106,6 +109,9 @@ export class MdEditor extends LitElement {
       this.applying = true;
       this.view.setState(this.createState(this.value));
       this.applying = false;
+    }
+    if (changed.has("checkSpelling") && this.view) {
+      this.view.dispatch({ effects: this.spelling.reconfigure(spellingAttributes(this.checkSpelling)) });
     }
   }
 
@@ -154,6 +160,7 @@ export class MdEditor extends LitElement {
       placeholder(this.placeholderText),
       shortcodes,
       editorTheme,
+      this.spelling.of(spellingAttributes(this.checkSpelling)),
       keymap.of([
         { key: "Mod-b", run: (v) => wrap(v, "**") },
         { key: "Mod-i", run: (v) => wrap(v, "_") },
@@ -191,6 +198,11 @@ export class MdEditor extends LitElement {
   render() {
     return html`<div class="host"></div>`;
   }
+}
+
+/** CodeMirror turns spell checking off by default. Autocorrect stays off: it would rewrite code and shortcodes. */
+function spellingAttributes(on: boolean): Extension {
+  return EditorView.contentAttributes.of({ spellcheck: on ? "true" : "false", autocorrect: "off" });
 }
 
 function wrap(view: EditorView, mark: string): boolean {

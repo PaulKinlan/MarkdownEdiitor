@@ -43,6 +43,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+        env:
+          # Origin trial tokens (e.g. WebMCP), comma-separated. Optional.
+          ORIGIN_TRIAL_TOKENS: ${{ secrets.ORIGIN_TRIAL_TOKENS }}
 
       - name: Work out the Worker name
         id: target

@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { ChatItem, Edit, ModelInfo } from "../shared/protocol";
-import { editDecisions, type AgentConnection } from "../lib/agent-client";
+import { editDecisions, type AgentLink } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, loadCustomActions, saveCustomActions, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
 import { controls } from "./shared";
@@ -62,7 +62,7 @@ export class AgentPanel extends LitElement {
     `,
   ];
 
-  @property({ attribute: false }) connection?: AgentConnection;
+  @property({ attribute: false }) connection?: AgentLink;
   @property({ attribute: false }) models: ModelInfo[] = [];
   @property() model = "";
   @property() configError = "";
@@ -83,7 +83,7 @@ export class AgentPanel extends LitElement {
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("connection")) {
-      const old = changed.get("connection") as AgentConnection | undefined;
+      const old = changed.get("connection") as AgentLink | undefined;
       old?.removeEventListener("change", this.onChange);
       old?.removeEventListener("error", this.onError);
       this.connection?.addEventListener("change", this.onChange);
