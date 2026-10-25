@@ -95,9 +95,14 @@ describe("Post", () => {
     expect(() => post.setRawFrontMatter("null")).toThrow();
     expect(() => post.setRawFrontMatter("[1]")).toThrow();
     expect(post.get("title")).toBe("a");
+  });
+
+  it("keeps YAML anchors when editing an anchored field", () => {
     const yaml = Post.parse("---\nauthors: &people [alice]\nreviewers: *people\n---\n");
-    expect(() => yaml.set("authors", ["bob"])).toThrow();
-    expect(yaml.get("authors")).toEqual(["alice"]);
-    expect(yaml.toString()).toBe("---\nauthors: &people [alice]\nreviewers: *people\n---\n");
+    yaml.set("authors", ["bob"]);
+    expect(yaml.get("authors")).toEqual(["bob"]);
+    expect(yaml.get("reviewers")).toEqual(["bob"]);
+    expect(yaml.toString()).toContain("&people");
+    expect(yaml.toString()).toContain("reviewers: *people");
   });
 });

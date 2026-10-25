@@ -164,12 +164,15 @@ export function setYamlField(source: string, key: string, value: unknown): strin
   }
 
   const quoteType = isScalar(pair.value) && typeof value === "string" ? (pair.value as Scalar).type : undefined;
-  return source.slice(0, start) + renderPair(key, value, quoteType, usesIndentedSeq(source)) + source.slice(end).replace(/^[ \t]+(?=\r?\n|$)/, "");
+  const anchor = (pair.value as { anchor?: string } | null)?.anchor;
+  return source.slice(0, start) + renderPair(key, value, quoteType, usesIndentedSeq(source), anchor) + source.slice(end).replace(/^[ \t]+(?=\r?\n|$)/, "");
 }
 
-function renderPair(key: string, value: unknown, quoteType?: Scalar.Type, indentSeq = true): string {
+function renderPair(key: string, value: unknown, quoteType?: Scalar.Type, indentSeq = true, anchor?: string): string {
   const doc = new Document({});
   const node = doc.createNode(value);
+  // Aliases elsewhere (`reviewers: *people`) still need the anchor to resolve.
+  if (anchor) node.anchor = anchor;
   // Keep the author's quoting style for strings, unless the new text needs something else.
   if (quoteType && isScalar(node) && (quoteType === "QUOTE_DOUBLE" || quoteType === "QUOTE_SINGLE")) node.type = quoteType;
   doc.set(key, node);
