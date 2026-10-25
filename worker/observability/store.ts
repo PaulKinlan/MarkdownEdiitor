@@ -1,9 +1,17 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { fingerprint, percentile, type ReportEvent, type Severity } from "./ingest";
+import { fingerprint, rank, type ReportEvent, type Severity } from "./ingest";
 
 /** Events one client IP can add per minute; the rest are dropped. */
 const RATE_PER_MINUTE = 120;
+
+interface Percentiles {
+  count: number;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+  p99: number | null;
+}
 
 export interface StoredEvent {
   seq: number;
@@ -21,8 +29,10 @@ export interface StoredEvent {
  * The one store for browser reports and Web Vitals (a single instance, named
  * "global"). Events are de-duplicated as they are written: a repeat of the
  * same problem bumps `occurrences` and `last_seen` instead of adding a row, so
- * a flood can't push out distinct history. Vitals keep every sample, so
- * percentiles can be compared across deploys.
+ * a flood can't push out distinct history. A repeat also moves the row to the
+ * next `seq`, so a reader following the `since` cursor sees it come back.
+ * Per-hour counts give occurrences within a window. Vitals keep every
+ * sample, so percentiles can be compared across deploys.
  */
 export class Observability extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -32,7 +42,7 @@ export class Observability extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS events (
-      seq INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT NOT NULL UNIQUE, type TEXT NOT NULL, severity TEXT NOT NULL,
+      seq INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, type TEXT NOT NULL, severity TEXT NOT NULL,
       route TEXT NOT NULL, detail TEXT NOT NULL, commit_sha TEXT NOT NULL, occurrences INTEGER NOT NULL,
       first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL
     )`);
@@ -40,7 +50,11 @@ export class Observability extends DurableObject<Env> {
       seq INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, value REAL NOT NULL, route TEXT NOT NULL,
       commit_sha TEXT NOT NULL, at INTEGER NOT NULL
     )`);
-    this.sql.exec("CREATE INDEX IF NOT EXISTS vitals_at ON vitals (at)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS vitals_name ON vitals (name, at, value)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS vitals_commit ON vitals (commit_sha, name, at, value)");
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS event_hours (
+      fingerprint TEXT NOT NULL, hour INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (fingerprint, hour)
+    )`);
   }
 
   /** Stores a batch from one client. Returns how many were accepted. */
@@ -53,19 +67,28 @@ export class Observability extends DurableObject<Env> {
     if (this.rate.size > 1000) for (const [k, v] of this.rate) if (v.minute !== minute) this.rate.delete(k);
 
     const now = Date.now();
+    const hour = Math.floor(now / 3_600_000);
     for (const e of accepted) {
+      // The page says which build it runs; it can be older than this Worker.
+      const from = e.commit ?? commit;
       if (e.vital) {
-        this.sql.exec("INSERT INTO vitals (name, value, route, commit_sha, at) VALUES (?, ?, ?, ?, ?)", e.vital.name, e.vital.value, e.route, commit, now);
+        this.sql.exec("INSERT INTO vitals (name, value, route, commit_sha, at) VALUES (?, ?, ?, ?, ?)", e.vital.name, e.vital.value, e.route, from, now);
       }
       // Good vitals are only samples; the rest are also worth seeing in the error feed.
       if (e.vital && e.severity === "info") continue;
       const fp = await fingerprint(e);
+      // seq is the cursor: new rows and repeats both take the next value.
+      const next = this.sql.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events").one().seq;
       this.sql.exec(
-        `INSERT INTO events (fingerprint, type, severity, route, detail, commit_sha, occurrences, first_seen, last_seen)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-         ON CONFLICT (fingerprint) DO UPDATE SET occurrences = occurrences + 1, last_seen = excluded.last_seen,
+        `INSERT INTO events (seq, fingerprint, type, severity, route, detail, commit_sha, occurrences, first_seen, last_seen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+         ON CONFLICT (fingerprint) DO UPDATE SET seq = excluded.seq, occurrences = occurrences + 1, last_seen = excluded.last_seen,
            detail = excluded.detail, commit_sha = excluded.commit_sha`,
-        fp, e.type, e.severity, e.route, JSON.stringify(e.detail), commit, now, now,
+        next, fp, e.type, e.severity, e.route, JSON.stringify(e.detail), from, now, now,
+      );
+      this.sql.exec(
+        "INSERT INTO event_hours (fingerprint, hour, count) VALUES (?, ?, 1) ON CONFLICT (fingerprint, hour) DO UPDATE SET count = count + 1",
+        fp, hour,
       );
     }
     return accepted.length;
@@ -89,29 +112,40 @@ export class Observability extends DurableObject<Env> {
       }));
   }
 
-  /** Counts by severity over the last day, and Vitals percentiles over the last week and per deploy. */
+  /** Counts by severity over the last day, and Vitals percentiles over the last week, per metric and per deploy. */
   summary() {
-    const day = Date.now() - 86_400_000;
+    const dayHour = Math.floor(Date.now() / 3_600_000) - 24;
     const week = Date.now() - 7 * 86_400_000;
-    const severities = this.sql
+    const lastDay = this.sql
       .exec<{ severity: string; events: number; occurrences: number }>(
-        "SELECT severity, COUNT(*) AS events, SUM(occurrences) AS occurrences FROM events WHERE last_seen >= ? GROUP BY severity",
-        day,
+        `SELECT e.severity, COUNT(DISTINCT e.fingerprint) AS events, SUM(h.count) AS occurrences
+         FROM event_hours h JOIN events e ON e.fingerprint = h.fingerprint WHERE h.hour > ? GROUP BY e.severity`,
+        dayHour,
       )
       .toArray();
-    const rows = this.sql.exec<{ name: string; value: number; commit_sha: string }>("SELECT name, value, commit_sha FROM vitals WHERE at >= ? ORDER BY value LIMIT 100000", week).toArray();
-    const group = (key: (r: (typeof rows)[number]) => string) => {
-      const groups = new Map<string, number[]>();
-      for (const r of rows) {
-        const k = key(r);
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k)!.push(r.value);
+    const vitals: Record<string, Percentiles> = {};
+    for (const { name } of this.sql.exec<{ name: string }>("SELECT DISTINCT name FROM vitals WHERE at >= ?", week)) {
+      vitals[name] = this.percentiles("name = ? AND at >= ?", [name, week]);
+    }
+    // The ten most recent deploys that sent samples this week.
+    const commits = this.sql
+      .exec<{ commit_sha: string }>("SELECT commit_sha FROM vitals WHERE at >= ? GROUP BY commit_sha ORDER BY MAX(at) DESC LIMIT 10", week)
+      .toArray();
+    const vitalsByCommit: Record<string, Percentiles> = {};
+    for (const { commit_sha } of commits) {
+      for (const { name } of this.sql.exec<{ name: string }>("SELECT DISTINCT name FROM vitals WHERE commit_sha = ? AND at >= ?", commit_sha, week)) {
+        vitalsByCommit[`${commit_sha.slice(0, 7)} ${name}`] = this.percentiles("commit_sha = ? AND name = ? AND at >= ?", [commit_sha, name, week]);
       }
-      return Object.fromEntries(
-        [...groups].map(([k, values]) => [k, { count: values.length, p50: percentile(values, 50), p75: percentile(values, 75), p95: percentile(values, 95), p99: percentile(values, 99) }]),
-      );
-    };
-    const latest = this.sql.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) AS seq FROM events").one().seq;
-    return { latestSeq: latest, lastDay: severities, vitals: group((r) => r.name), vitalsByCommit: group((r) => `${r.commit_sha.slice(0, 7)} ${r.name}`) };
+    }
+    const latestSeq = this.sql.exec<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) AS seq FROM events").one().seq;
+    return { latestSeq, lastDay, vitals, vitalsByCommit };
+  }
+
+  /** Nearest-rank percentiles over every sample matching `where`, read by offset so none are left out. */
+  private percentiles(where: string, params: (string | number)[]): Percentiles {
+    const count = this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM vitals WHERE ${where}`, ...params).one().n;
+    const at = (p: number) =>
+      this.sql.exec<{ value: number }>(`SELECT value FROM vitals WHERE ${where} ORDER BY value LIMIT 1 OFFSET ?`, ...params, rank(count, p)).toArray()[0]?.value ?? null;
+    return { count, p50: at(50), p75: at(75), p95: at(95), p99: at(99) };
   }
 }

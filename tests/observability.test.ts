@@ -100,3 +100,20 @@ describe("percentile", () => {
     expect(percentile([], 50)).toBeNull();
   });
 });
+
+describe("review fixes", () => {
+  it("drops objects nested past the redaction depth", () => {
+    const body = { a: { b: { c: { d: { e: { message: "?token=hunter2" } } } } } };
+    const [e] = parseReports(JSON.stringify([{ type: "error", url: "https://e.example/", body }]), "application/json");
+    expect(JSON.stringify(e.detail)).not.toContain("hunter2");
+    expect(JSON.stringify(e.detail)).toContain("[truncated]");
+  });
+
+  it("keeps the sending build's commit when it looks like one", () => {
+    const body = JSON.stringify([
+      { type: "error", url: "https://e.example/", body: {}, commit: "abc1234" },
+      { type: "error", url: "https://e.example/", body: {}, commit: "not a commit" },
+    ]);
+    expect(parseReports(body, "application/json").map((e) => e.commit)).toEqual(["abc1234", undefined]);
+  });
+});

@@ -17,6 +17,8 @@ export interface ReportEvent {
   /** The part of the report that tells one problem from another, used for de-duplication. */
   key: string;
   detail: Record<string, unknown>;
+  /** The build that sent it (the page's own events say); otherwise the receiving Worker's. */
+  commit?: string;
   /** Set for Web Vitals: the metric's name and value, kept for percentiles. */
   vital?: { name: string; value: number };
 }
@@ -63,7 +65,7 @@ export function parseReports(text: string, contentType: string): ReportEvent[] {
   } catch {
     return [];
   }
-  const raw: { type: string; url: string; body: Record<string, unknown> }[] = [];
+  const raw: { type: string; url: string; body: Record<string, unknown>; commit?: string }[] = [];
   if (contentType.includes("application/csp-report")) {
     const r = (data as { "csp-report"?: Record<string, unknown> })?.["csp-report"];
     if (r && typeof r === "object") {
@@ -83,13 +85,18 @@ export function parseReports(text: string, contentType: string): ReportEvent[] {
   } else {
     for (const r of Array.isArray(data) ? data : [data]) {
       if (!r || typeof r !== "object") continue;
-      const { type, url, body } = r as Record<string, unknown>;
+      const { type, url, body, commit } = r as Record<string, unknown>;
       if (typeof type !== "string" || !/^[\w-]{1,40}$/.test(type)) continue;
-      raw.push({ type, url: str(url), body: body && typeof body === "object" ? (body as Record<string, unknown>) : {} });
+      raw.push({
+        type,
+        url: str(url),
+        body: body && typeof body === "object" ? (body as Record<string, unknown>) : {},
+        commit: typeof commit === "string" && /^([0-9a-f]{7,40}|dev)$/.test(commit) ? commit : undefined,
+      });
     }
   }
   // A batch can't flood the store with one request.
-  return raw.slice(0, 50).map(({ type, url, body }) => toEvent(type, url, redactDeep(body) as Record<string, unknown>));
+  return raw.slice(0, 50).map(({ type, url, body, commit }) => ({ ...toEvent(type, url, redactDeep(body) as Record<string, unknown>), commit }));
 }
 
 function toEvent(type: string, url: string, detail: Record<string, unknown>): ReportEvent {
@@ -184,7 +191,9 @@ export function redact(text: string): string {
 
 function redactDeep(value: unknown, depth = 0): unknown {
   if (typeof value === "string") return redact(value).slice(0, 2000);
-  if (depth > 4 || value == null || typeof value !== "object") return value;
+  if (value == null || typeof value !== "object") return value;
+  // Deeper than this is dropped, not kept as is: unredacted strings could hide in it.
+  if (depth > 4) return "[truncated]";
   if (Array.isArray(value)) return value.slice(0, 20).map((v) => redactDeep(v, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value).slice(0, 40)) out[k] = redactDeep(v, depth + 1);
@@ -198,8 +207,12 @@ export async function fingerprint(e: Pick<ReportEvent, "type" | "severity" | "ro
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Zero-based index of the nearest-rank `p`th percentile in an ascending list of `count` values. */
+export function rank(count: number, p: number): number {
+  return Math.min(count - 1, Math.max(0, Math.ceil((p / 100) * count) - 1));
+}
+
 /** Nearest-rank percentile of an ascending list. */
 export function percentile(sorted: number[], p: number): number | null {
-  if (!sorted.length) return null;
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))];
+  return sorted.length ? sorted[rank(sorted.length, p)] : null;
 }

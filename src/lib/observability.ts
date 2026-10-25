@@ -13,6 +13,8 @@ interface ClientReport {
   type: string;
   url: string;
   body: Record<string, unknown>;
+  /** The build that sent it, which can be older than the Worker receiving it. */
+  commit: string;
 }
 
 let queue: ClientReport[] = [];
@@ -34,7 +36,7 @@ export function startObservability() {
 }
 
 function send(type: string, body: Record<string, unknown>) {
-  queue.push({ type, url: location.href, body });
+  queue.push({ type, url: location.href, body, commit: __COMMIT__ });
   if (queue.length >= 20) flush();
 }
 
@@ -43,7 +45,7 @@ function flush() {
   vitals.forEach((value, name) => {
     if (sentVitals.get(name) === value) return;
     sentVitals.set(name, value);
-    queue.push({ type: "web-vital", url: location.href, body: { name, value, ...vitalDetail.get(name) } });
+    queue.push({ type: "web-vital", url: location.href, body: { name, value, ...vitalDetail.get(name) }, commit: __COMMIT__ });
   });
   if (!queue.length) return;
   const batch = queue;
@@ -121,6 +123,8 @@ function observeVitals() {
   let windowValue = 0;
   let windowStart = 0;
   let previous = 0;
+  // A page that never shifts scores 0: count it, or CLS percentiles only see unstable visits.
+  if (PerformanceObserver.supportedEntryTypes?.includes("layout-shift")) vitals.set("CLS", 0);
   observe("layout-shift", (entries) => {
     for (const entry of entries as (PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: { node?: Node }[] })[]) {
       if (entry.hadRecentInput) continue;
@@ -174,7 +178,8 @@ function selectorOf(node: Node | null | undefined): string | undefined {
     else if (el.classList.length) part += `.${[...el.classList].slice(0, 2).join(".")}`;
     parts.unshift(part);
     const parent: Node | null = el.parentNode;
-    el = parent instanceof ShadowRoot ? parent.host : (parent as Element | null);
+    // Stop at the document; step out of a shadow root to its host.
+    el = parent instanceof ShadowRoot ? parent.host : parent instanceof Element ? parent : null;
   }
   return parts.join(" > ");
 }
