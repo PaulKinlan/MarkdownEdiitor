@@ -28,9 +28,20 @@ export async function syncSiteIndex(
     const summary = byPath.get(path);
     const file = await (await getFile(root, path))?.getFile();
     if (!summary || !file) continue;
-    const body = Post.parse(await file.text()).body;
-    batch.push({ path, title: summary.title, url: summary.url, date: summary.date?.toISOString(), lastModified: summary.lastModified, body });
-    bytes += body.length;
+    const text = await file.text();
+    const body = Post.parse(text).body;
+    batch.push({
+      path,
+      title: summary.title,
+      url: summary.url,
+      date: summary.date?.toISOString(),
+      lastModified: summary.lastModified,
+      draft: summary.draft,
+      frontMatter: summary.frontMatter,
+      body,
+      text,
+    });
+    bytes += body.length + text.length;
     if (batch.length >= 100 || bytes > 2_000_000) await flush();
   }
   await flush();
