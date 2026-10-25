@@ -123,6 +123,21 @@ export class MdEditor extends LitElement {
     this.view.focus();
   }
 
+  /** Replaces `find` with `replace` as an undoable edit, if `find` occurs exactly once. */
+  replaceUnique(find: string, replace: string): boolean {
+    if (!this.view) return false;
+    const doc = this.view.state.doc.toString();
+    const at = doc.indexOf(find);
+    if (at === -1 || doc.indexOf(find, at + 1) !== -1) return false;
+    this.view.dispatch({
+      changes: { from: at, to: at + find.length, insert: replace },
+      effects: EditorView.scrollIntoView(at, { y: "center" }),
+    });
+    // Focus so Ctrl/⌘+Z reaches the editor's history straight after accepting.
+    this.view.focus();
+    return true;
+  }
+
   focus() {
     this.view?.focus();
   }

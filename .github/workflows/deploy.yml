@@ -8,6 +8,9 @@ name: Deploy
 #
 # Needs repository secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
 # CLOUDFLARE_ACCOUNT_ID. Without them, the workflow still builds and tests.
+# Agent secrets (model API keys, search keys, EDITOR_TOKEN) set as repository
+# secrets are copied to each Worker on deploy. Preview Workers also get the
+# scripted demo model, so the agent loop can be tried without spending tokens.
 
 on:
   push:
@@ -31,8 +34,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -65,14 +68,39 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          npx wrangler deploy --name "${{ steps.target.outputs.name }}" | tee deploy.log
+          extra=""
+          if [ "${{ github.ref_name }}" != "main" ]; then extra="--var DEMO_MODEL:1"; fi
+          npx wrangler deploy --name "${{ steps.target.outputs.name }}" $extra | tee deploy.log
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Copy agent secrets to the Worker
+        if: steps.target.outputs.enabled == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          EDITOR_TOKEN: ${{ secrets.EDITOR_TOKEN }}
+        run: |
+          node -e '
+            const names = ["ANTHROPIC_API_KEY","DEEPSEEK_API_KEY","OPENAI_API_KEY","GEMINI_API_KEY","OPENROUTER_API_KEY","BRAVE_API_KEY","TAVILY_API_KEY","EDITOR_TOKEN"];
+            const set = Object.fromEntries(names.filter((n) => process.env[n]).map((n) => [n, process.env[n]]));
+            require("fs").writeFileSync("secrets.json", JSON.stringify(set));
+            console.log("Copying:", Object.keys(set).join(", ") || "none");
+          '
+          if [ "$(cat secrets.json)" != "{}" ]; then npx wrangler secret bulk secrets.json --name "${{ steps.target.outputs.name }}"; fi
+          rm -f secrets.json
+
       - name: Post the preview URL on the PR
         if: steps.deploy.outputs.url != '' && github.ref_name != 'main'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           URL: ${{ steps.deploy.outputs.url }}
           WORKER_NAME: ${{ steps.target.outputs.name }}
