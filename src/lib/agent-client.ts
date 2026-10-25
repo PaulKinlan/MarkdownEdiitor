@@ -1,4 +1,5 @@
 import type { ClientToServer, ModelInfo, PostContext, ServerToClient } from "../shared/protocol";
+import type { McpToolInfo, ToolSettings } from "../shared/tools";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
 
@@ -37,6 +38,34 @@ async function api<T>(settings: AgentSettings, path: string, init?: RequestInit)
 
 export function fetchAgentConfig(settings: AgentSettings) {
   return api<{ models: ModelInfo[]; webSearch: boolean }>(settings, "/api/config");
+}
+
+export function fetchToolSettings(settings: AgentSettings) {
+  return api<ToolSettings>(settings, "/api/tools");
+}
+
+/** Saves tool settings; rejects with the server's reasons when they don't validate. */
+export async function saveToolSettings(settings: AgentSettings, tools: ToolSettings): Promise<ToolSettings> {
+  const res = await fetch(apiUrl(settings, "/api/tools"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}) },
+    body: JSON.stringify(tools),
+  });
+  const body = (await res.json().catch(() => ({}))) as { settings?: ToolSettings; problems?: string[]; error?: string };
+  if (!res.ok || !body.settings) throw new Error(body.problems?.join(" ") || body.error || `Saving tools failed: ${res.status}`);
+  return body.settings;
+}
+
+/** Lists an MCP server's tools. `id` lets the server use the stored token for a saved server. */
+export async function discoverMcpTools(settings: AgentSettings, server: { url: string; headers: Record<string, string>; id?: string }): Promise<McpToolInfo[]> {
+  const res = await fetch(apiUrl(settings, "/api/tools/mcp/discover"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}) },
+    body: JSON.stringify(server),
+  });
+  const body = (await res.json().catch(() => ({}))) as { tools?: McpToolInfo[]; error?: string };
+  if (!res.ok || !body.tools) throw new Error(body.error || `Could not reach the MCP server (${res.status})`);
+  return body.tools;
 }
 
 export function syncManifest(settings: AgentSettings, siteId: string, manifest: { path: string; lastModified: number }[]) {

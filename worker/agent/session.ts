@@ -1,13 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createRegistry, Harness, type Conversation, type Wake } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type Conversation, type Extension, type Registry, type Wake } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ClientToServer, ModelRef, PostContext, ServerToClient } from "../../src/shared/protocol";
+import type { ToolSettings } from "../../src/shared/tools";
 import type { Env } from "../env";
+import { addNativeWebTools, installConfiguredTools, loadToolSettings } from "../tools";
 import { createConfiguredModels } from "./models";
 import { projectView } from "./view";
-import { fetchReadable, webSearcher } from "./web";
+import { pageFetcher, webSearcher } from "./web";
 import { createWritingExtension } from "./writing";
 
 const HEARTBEAT_MS = 60_000;
@@ -27,6 +29,9 @@ export class AgentSession extends DurableObject<Env> {
   private lastView = "";
   private pending?: ReturnType<typeof setTimeout>;
   private latest: unknown;
+  private registry!: Registry;
+  private toolSettings?: ToolSettings;
+  private toolExtensions: Extension[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -41,21 +46,22 @@ export class AgentSession extends DurableObject<Env> {
       const row = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'post'");
       if (row) this.post = JSON.parse(row.value);
 
-      const registry = createRegistry();
+      const registry = (this.registry = createRegistry());
       registry.install(
         createWritingExtension({
           post: () => this.post,
           searchPosts: (query, limit) => this.index()?.search(query, limit) ?? Promise.resolve([]),
           readPastPost: async (path) => (await this.index()?.get(path)) ?? undefined,
           webSearch: webSearcher(env),
-          fetchUrl: fetchReadable,
+          fetchUrl: pageFetcher(env),
         }),
       );
+      await this.refreshTools();
       const storage = await SqliteStorage.open(this.database, { prefix: "pi_" });
       this.harness = await Harness.open(
         storage,
         {
-          models: createConfiguredModels(env),
+          models: addNativeWebTools(createConfiguredModels(env), () => this.toolSettings?.nativeWebTools ?? true),
           registry,
           identity: { attribution: { name: "hugo-editor", url: "https://github.com/PaulKinlan/MarkdownEdiitor" } },
           onWake: (wake) => void this.arm(wake).catch(() => ctx.abort("Alarm write failed")),
@@ -121,12 +127,23 @@ export class AgentSession extends DurableObject<Env> {
     if (!current || current.provider !== model.provider || current.modelId !== model.modelId) {
       await this.root.configure({ model }, context);
     }
+    await this.refreshTools();
     // Arm before any call that can start work; a missing alarm would strand it after an eviction.
     await this.arm({ ...this.harness.wake(), active: true });
     await this.root.submit(
       { type: "input", content: text, requestId, ...(label ? { entry: { kind: "editor.prompt", data: { label } } } : {}) },
       context,
     );
+  }
+
+  /** Picks up tool settings saved since the last prompt; a settings outage keeps the tools we had. */
+  private async refreshTools() {
+    try {
+      this.toolSettings = await loadToolSettings(this.env);
+    } catch {
+      return;
+    }
+    this.toolExtensions = installConfiguredTools(this.registry, this.toolSettings, this.toolExtensions);
   }
 
   private index() {
