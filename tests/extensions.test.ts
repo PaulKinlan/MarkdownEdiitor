@@ -68,7 +68,26 @@ describe("manifest parsing", () => {
   });
 
   it("parses the built-in extensions", () => {
-    expect(builtinExtensions().map((r) => r.manifest.id)).toEqual(["word-count", "readability", "data-checker", "extension-builder"]);
+    expect(builtinExtensions().map((r) => r.manifest.id)).toEqual([
+      "word-count",
+      "word-goal",
+      "edit-times",
+      "writing-streak",
+      "readability",
+      "repetition",
+      "style-guide",
+      "seo-check",
+      "link-checker",
+      "data-checker",
+      "tag-suggester",
+      "outline",
+      "autosave",
+      "dictation",
+      "emoji",
+      "snippets",
+      "agent-alert",
+      "extension-builder",
+    ]);
   });
 });
 
@@ -165,7 +184,8 @@ describe("extension host", () => {
     const text = `---\ntitle: numbers\n---\n\nIn 2024 we had 1,200 users, up 35% from the year before, and revenue of $4.5 million. This sentence is deliberately written to be very long so that it goes well past the thirty word limit that the readability extension uses to underline sentences for the author to look at again.\n`;
     const log: string[] = [];
     const host = new ExtensionHost(bridge(snapshot(text), log), { createWorker: fakeWorker, storage: memory() });
-    await host.run(builtinExtensions());
+    const pick = ["word-count", "readability", "data-checker", "extension-builder"];
+    await host.run(builtinExtensions().filter((r) => pick.includes(r.manifest.id)));
     await until(() => host.statuses.length === 3 && host.annotations.length > 0);
     expect(host.status("readability").status).toBe("running");
     expect(host.status("data-checker").status).toBe("running");
@@ -186,6 +206,44 @@ describe("extension host", () => {
     expect(host.skills.map((s) => s.name)).toEqual(["check-data", "write-extension"]);
     expect(host.skills[1].instructions).toContain("## editor.agent");
     expect(host.panels.map((p) => p.spec.title)).toEqual(["Claims"]);
+    host.stopAll();
+  });
+});
+
+describe("more built-in extensions", () => {
+  it("start cleanly and report on a post", async () => {
+    const text = `---\ntitle: Tags\ntags: [web]\nwordGoal: 100\n---\n\n# Big heading\n\nI utilise the web platform and Chrome. Chrome is very fast, and Chrome keeps getting faster.\n\n#### Deep\n\n![](/img.png) See [here](/missing/) and [the post](/hello/).\n`;
+    const b = {
+      ...bridge(snapshot(text)),
+      sitePosts: () => [
+        { path: "content/posts/hello.md", url: "/hello/", title: "Hello", section: "posts", draft: false, tags: ["chrome", "web"], categories: [] },
+        { path: "content/posts/b.md", url: "/b/", title: "B", section: "posts", draft: false, tags: ["chrome", "rust"], categories: [] },
+      ],
+      readSiteFile: async (path: string) => (path === ".editor/style-guide.json" ? '{"replace":{"utilise":"use"},"avoid":["very"]}' : null),
+      select: () => true,
+    };
+    const host = new ExtensionHost(b, { createWorker: fakeWorker, storage: memory() });
+    const ids = ["word-goal", "outline", "seo-check", "style-guide", "repetition", "tag-suggester", "link-checker", "edit-times", "writing-streak", "emoji", "snippets", "autosave", "dictation", "agent-alert"];
+    await host.run(builtinExtensions().filter((r) => ids.includes(r.manifest.id)));
+    for (const id of ids) expect([id, host.status(id).status, host.status(id).error]).toEqual([id, "running", undefined]);
+    await until(() => host.statuses.some((s) => s.spec.id === "goal" && s.spec.text) && host.statuses.some((s) => s.spec.id === "style" && s.spec.text));
+    const status = Object.fromEntries(host.statuses.map((s) => [`${s.extension}:${s.spec.id}`, s.spec.text]));
+    expect(status["word-goal:goal"]).toMatch(/^\d+ \/ 100 words$/);
+    expect(status["seo-check:seo"]).toMatch(/^SEO: \d+ to check$/);
+    expect(status["style-guide:style"]).toBe("Style: 2");
+    expect(host.panels.map((p) => p.spec.title)).toEqual(expect.arrayContaining(["Outline", "Streak"]));
+
+    const seo = (await host.call({ kind: "tool", extension: "seo-check", name: "seo_report", args: {} })).text;
+    expect(seo).toContain("Heading jumps from level 1 to 4");
+    expect(seo).toContain("Image without alt text");
+    expect(seo).toContain("No description or summary");
+    expect(seo).toContain("Link text “here”");
+    const tags = (await host.call({ kind: "tool", extension: "tag-suggester", name: "suggest_tags", args: {} })).text;
+    expect(tags).toMatch(/^- chrome: mentioned 3×, used on 2 posts$/);
+    const links = (await host.call({ kind: "tool", extension: "link-checker", name: "check_links", args: {} })).text;
+    expect(links).toContain("/missing/ (no such page or file)");
+    expect(links).not.toContain("/hello/");
+    expect((await host.call({ kind: "tool", extension: "repetition", name: "repeated_words", args: {} })).text).toContain("chrome ×2");
     host.stopAll();
   });
 });

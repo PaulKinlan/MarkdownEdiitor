@@ -13,11 +13,30 @@ function originTrials() {
 
 export default defineConfig({
   build: { outDir: "dist", target: "es2022" },
-  plugins: [originTrials(), serviceWorker()],
+  plugins: [originTrials(), extensionWorkers(), serviceWorker()],
   // `npm run dev:worker` serves the agent API on 8787.
   server: { proxy: { "/api": { target: "http://localhost:8787", ws: true } } },
   test: { environment: "node", include: ["tests/**/*.test.ts"] },
 });
+
+/**
+ * Copies the extension worker to two fixed paths, so public/_headers can give
+ * each its own Content-Security-Policy: extension-worker/sandboxed.js can't
+ * reach the network, and extension-worker/network.js (for extensions with the
+ * "network" permission) can. See src/extensions/host.ts.
+ */
+function extensionWorkers(): Plugin {
+  return {
+    name: "extension-workers",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const worker = Object.values(bundle).find((f) => /^assets\/worker-[\w-]+\.js$/.test(f.fileName));
+      if (!worker) this.error("The extension worker (src/extensions/worker.ts) wasn't in the bundle.");
+      const source = worker.type === "chunk" ? worker.code : worker.source;
+      for (const name of ["sandboxed", "network"]) this.emitFile({ type: "asset", fileName: `extension-worker/${name}.js`, source });
+    },
+  };
+}
 
 /**
  * Emits dist/sw.js from src/sw/service-worker.ts with the build's file list

@@ -37,6 +37,8 @@ import "./frontmatter-form";
 import "./preview-pane";
 import "./agent-panel";
 import "./extensions-dialog";
+import "./command-palette";
+import { keyLabel, type CommandPalette, type PaletteCommand } from "./command-palette";
 import "./tools-settings";
 import type { ToolsSettings } from "./tools-settings";
 
@@ -112,7 +114,6 @@ export class MdApp extends LitElement {
       .toolbar .path { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; color: var(--fg-2); flex: 1; min-width: 0; }
       .toolbar .path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
       .toolbar select { font-size: 13px; }
-      .toolbar select.commands { width: 9.5em; }
       md-editor { flex: 1; }
       .side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--bg-2); }
       .side > preview-pane, .side > agent-panel, .side > .ext-panel { flex: 1; }
@@ -241,6 +242,7 @@ export class MdApp extends LitElement {
   @query("#new-post") private newPostDialog?: HTMLDialogElement;
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
   @query("extensions-dialog") private extensionsDialog?: ExtensionsDialog;
+  @query("command-palette") private palette?: CommandPalette;
   @query("tools-settings") private toolsSettings?: ToolsSettings;
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
@@ -264,6 +266,29 @@ export class MdApp extends LitElement {
       if (!this.site || !clean || clean.split("/").some((part) => part === ".." || part === ".git")) return null;
       return (await readText(this.site.handle, clean).catch(() => undefined)) ?? null;
     },
+    select: (from, to) => {
+      if (!this.open || !this.editor) return false;
+      const bodyStart = this.text.length - this.open.post.body.length;
+      if (from < bodyStart) return false;
+      this.editor.select(from - bodyStart, to - bodyStart);
+      return true;
+    },
+    save: async () => {
+      if (!this.dirty) return false;
+      await this.save();
+      return !this.dirty;
+    },
+    sitePosts: () =>
+      [...this.posts, ...this.notes].map((p) => ({
+        path: p.path,
+        url: p.url,
+        title: p.title,
+        section: p.section,
+        ...(p.date ? { date: p.date.toISOString().slice(0, 10) } : {}),
+        draft: p.draft,
+        tags: terms(p.frontMatter.tags),
+        categories: terms(p.frontMatter.categories),
+      })),
     prompt: (text, label) => {
       const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
       if (!this.connection || !provider || !rest.length) throw new Error("The assistant isn't ready: open a post and pick a model.");
@@ -773,6 +798,9 @@ export class MdApp extends LitElement {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void this.save();
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      this.palette?.open();
     } else if (!e.defaultPrevented) {
       this.extensions.host.handleKey(e);
     }
@@ -1333,7 +1361,7 @@ export class MdApp extends LitElement {
           : nothing}
         ${this.renderExtensionTools()}
       </div>
-      <md-editor .value=${post.body} .checkSpelling=${this.checkSpelling} .annotations=${this.bodyAnnotations} @change=${this.onBodyChange} @image-files=${this.onImageFiles}></md-editor>
+      <md-editor .value=${post.body} .checkSpelling=${this.checkSpelling} .annotations=${this.bodyAnnotations} @change=${this.onBodyChange} @image-files=${this.onImageFiles} @selection-change=${() => this.extensions.selectionChanged()}></md-editor>
     </main>`;
   }
 
@@ -1416,6 +1444,7 @@ export class MdApp extends LitElement {
           : nothing}
       </dialog>
       <extensions-dialog .controller=${this.extensions}></extensions-dialog>
+      <command-palette .commands=${this.paletteCommands()}></command-palette>
       <tools-settings .agentSettings=${this.agentSettings} ?webSearch=${this.serverWebSearch}></tools-settings>
     `;
   }
@@ -1427,20 +1456,36 @@ export class MdApp extends LitElement {
       (b) => html`<button class="small ghost" title=${b.spec.title ?? `${b.spec.label} (${b.name})`} @click=${() => this.extensions.host.clickButton(b.extension, b.spec.id)}>${b.spec.label}</button>`,
     )}
     ${commands.length
-      ? html`<select
-          class="commands"
-          aria-label="Extension commands"
-          @change=${(e: Event) => {
-            const select = e.target as HTMLSelectElement;
-            const [extension, ...id] = select.value.split(":");
-            select.value = "";
-            if (extension) void this.extensions.host.runCommand(extension, id.join(":"));
-          }}
-        >
-          <option value="">Commands…</option>
-          ${commands.map((c) => html`<option value=${`${c.extension}:${c.spec.id}`}>${c.spec.title}${c.spec.key ? ` (${c.spec.key.replace("Mod", navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl")})` : ""}</option>`)}
-        </select>`
+      ? html`<button class="small ghost" title=${`Commands (${keyLabel("Mod-Shift-p")})`} @click=${() => this.palette?.open()}>Commands…</button>`
       : nothing}`;
+  }
+
+  /** Everything the command palette lists: editor actions, extension commands, and the assistant's quick edits. */
+  private paletteCommands(): PaletteCommand[] {
+    const out: PaletteCommand[] = [];
+    if (this.open) out.push({ id: "save", title: "Save", key: "Mod-s", run: () => void this.save() });
+    out.push({ id: "preview", title: this.showPreview ? "Hide side panel" : "Show side panel", run: () => this.togglePreview() });
+    if (this.site) out.push({ id: "extensions", title: "Manage extensions…", run: () => this.extensionsDialog?.show() });
+    for (const c of this.extensions.host.commands) {
+      out.push({ id: `${c.extension}:${c.spec.id}`, title: c.spec.title, detail: c.name, key: c.spec.key, run: () => void this.extensions.host.runCommand(c.extension, c.spec.id) });
+    }
+    if (this.open) {
+      const edits = [...postActions(), ...this.extensions.host.quickEdits.map((e) => ({ name: e.spec.name, prompt: e.spec.prompt }))];
+      for (const a of edits) out.push({ id: `edit:${a.name}`, title: `Assistant: ${a.name}`, run: () => this.runPrompt(a.prompt, a.name) });
+    }
+    return out;
+  }
+
+  /** Starts a post assistant run, as a quick edit button does. */
+  private runPrompt(text: string, label: string) {
+    const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
+    if (!this.connection || !provider || !rest.length) {
+      this.error = "The assistant isn't ready: open a post and pick a model.";
+      return;
+    }
+    this.connection.prompt(text, { provider, modelId: rest.join("/") }, label);
+    if (!this.showPreview) this.togglePreview();
+    this.setSideTab("assistant");
   }
 
   /** With no post open (or a note, which has no URL) there is nothing to preview, so the side panel shows the assistant. */
@@ -1593,4 +1638,10 @@ function focusedFrontMatterField(): HTMLInputElement | HTMLTextAreaElement | und
 /** Edits that run on the open post (WebMCP tools only drive the post assistant). */
 function postActions() {
   return [...BUILTIN_ACTIONS, ...loadCustomActions().filter((a) => (a.scope ?? "post") === "post")];
+}
+
+/** A front matter taxonomy value as a list of strings. */
+function terms(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string" && value ? [value] : [];
 }

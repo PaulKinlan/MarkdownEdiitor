@@ -64,14 +64,19 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
       applyEdits: (edits: { find: string; replace: string }[]) => request("document.applyEdits", { edits }),
       insert: (text: string) => request("document.insert", { text }),
       annotate: (set: string, annotations: Annotation[]) => request("document.annotate", { set, annotations }),
+      select: (from: number, to?: number) => request("document.select", { from, ...(to === undefined ? {} : { to }) }),
+      save: () => request("document.save", {}),
     },
     site: {
       readFile: (path: string) => request("site.readFile", { path }),
+      posts: () => request("site.posts", {}),
     },
     ui: {
       notify: (message: string, level?: "info" | "warning" | "error") => request("ui.notify", { message, level }),
       confirm: (title: string, message?: string) => request("ui.confirm", { title, message }),
       pick: (title: string, items: string[]) => request("ui.pick", { title, items }),
+      input: (title: string, value?: string) => request("ui.input", { title, ...(value === undefined ? {} : { value }) }),
+      alert: (title: string, body?: string) => request("ui.alert", { title, ...(body === undefined ? {} : { body }) }),
       status(id: string, text: string, title?: string) {
         void request("ui.status", { id, text, title }).catch(report);
         return {
@@ -124,6 +129,10 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
       list: () => request("extensions.list", {}),
       read: (id: string) => request("extensions.read", { id }),
       install: (source: string) => request("extensions.install", { source }),
+    },
+    speech: {
+      start: (options: { lang?: string } = {}) => request("speech.start", { ...(options.lang ? { lang: options.lang } : {}) }),
+      stop: () => request("speech.stop", {}),
     },
     storage: {
       get: (key: string) => request("storage.get", { key }),
@@ -178,6 +187,10 @@ export function startRuntime(port: Port, options: RuntimeOptions = {}) {
       case "event": {
         if (message.name === "post:open" || message.name === "post:change" || message.name === "post:save") post = message.data as PostSnapshot;
         if (message.name === "post:close") post = null;
+        if (message.name === "selection" && post) {
+          const { from, to } = message.data as { from: number; to: number };
+          post = { ...post, selection: { from, to } };
+        }
         for (const listener of listeners.get(message.name) ?? []) {
           try {
             await listener(message.data as never);

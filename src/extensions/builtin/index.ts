@@ -7,6 +7,20 @@ import type { ExtensionRecord } from "../types";
 import { parseExtension } from "../loader";
 import text from "./text.js?raw";
 import wordCount from "./word-count.js?raw";
+import wordGoal from "./word-goal.js?raw";
+import editTimes from "./edit-times.js?raw";
+import writingStreak from "./writing-streak.js?raw";
+import outline from "./outline.js?raw";
+import seoCheck from "./seo-check.js?raw";
+import linkChecker from "./link-checker.js?raw";
+import styleGuide from "./style-guide.js?raw";
+import repetition from "./repetition.js?raw";
+import tagSuggester from "./tag-suggester.js?raw";
+import autosave from "./autosave.js?raw";
+import dictation from "./dictation.js?raw";
+import emoji from "./emoji.js?raw";
+import snippets from "./snippets.js?raw";
+import agentAlert from "./agent-alert.js?raw";
 import readability from "./readability.js?raw";
 import dataChecker from "./data-checker.js?raw";
 import builder from "./extension-builder.js?raw";
@@ -17,7 +31,25 @@ export function withHelpers(source: string, helpers = text): string {
   return `${inlined}\n${source.replace(/^import \{[^}]*\} from "\.\/text\.js";\n/m, "")}`;
 }
 
-export const BUILTIN_SOURCES = [wordCount, readability, dataChecker].map((s) => withHelpers(s)).concat(builder.replace('"__API_REFERENCE__"', JSON.stringify(apiReference)));
+export const BUILTIN_SOURCES = [
+  wordCount,
+  wordGoal,
+  editTimes,
+  writingStreak,
+  readability,
+  repetition,
+  styleGuide,
+  seoCheck,
+  linkChecker,
+  dataChecker,
+  tagSuggester,
+  outline,
+  autosave,
+  dictation,
+  emoji,
+  snippets,
+  agentAlert,
+].map((s) => withHelpers(s)).concat(builder.replace('"__API_REFERENCE__"', JSON.stringify(apiReference)));
 
 export function builtinExtensions(): ExtensionRecord[] {
   return BUILTIN_SOURCES.map((source) => ({ ...parseExtension(source), origin: "builtin" as const }));

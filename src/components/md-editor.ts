@@ -196,6 +196,15 @@ export class MdEditor extends LitElement {
     this.view?.focus();
   }
 
+  /** Selects a range (body offsets), scrolls it into view and focuses the editor. */
+  select(from: number, to = from) {
+    if (!this.view) return;
+    const max = this.view.state.doc.length;
+    const anchor = Math.min(from, max);
+    this.view.dispatch({ selection: { anchor, head: Math.min(to, max) }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
+    this.view.focus();
+  }
+
   /** The main selection, as body offsets. */
   get selection(): { from: number; to: number } {
     const range = this.view?.state.selection.main;
@@ -228,6 +237,7 @@ export class MdEditor extends LitElement {
           this.value = u.state.doc.toString();
           this.emit("change", { value: this.value });
         }
+        if (u.selectionSet) this.emit("selection-change");
       }),
       EditorView.domEventHandlers({
         drop: (e, view) => this.handleFiles(e.dataTransfer?.files, e, view.posAtCoords({ x: e.clientX, y: e.clientY })),

@@ -60,7 +60,8 @@ async function loadInstalled(): Promise<Installed[]> {
 function entry(record: ExtensionRecord, key: string, approvals: Approvals, extra: Partial<LibraryEntry> = {}): LibraryEntry {
   const approved = record.origin === "builtin" ? record.manifest.permissions : (approvals.approved[key] ?? []);
   const unapproved = record.manifest.permissions.filter((p) => !approved.includes(p));
-  const everApproved = record.origin === "builtin" || key in approvals.approved;
+  // A built-in is on unless turned off, or, if it is off by default, until it is turned on (approve() records that).
+  const everApproved = record.origin === "builtin" ? record.manifest.enabledByDefault !== false || key in approvals.approved : key in approvals.approved;
   return { ...record, key, unapproved, enabled: everApproved && !unapproved.length && !approvals.disabled.includes(key), ...extra };
 }
 

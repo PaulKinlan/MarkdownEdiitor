@@ -5,6 +5,7 @@
 // about editor events; the agent connection routes tool calls here.
 
 import { get as idbGet, set as idbSet } from "idb-keyval";
+import bundledWorker from "./worker.ts?worker&url";
 import { type AgentExtensionSpec, type ExtensionCall, type ExtensionCallResults } from "../shared/extensions";
 import {
   METHOD_PERMISSIONS,
@@ -29,6 +30,7 @@ import type {
   Permission,
   PostSnapshot,
   QuickEditSpec,
+  SitePost,
   SkillSpec,
   ToolSpec,
 } from "./types";
@@ -39,6 +41,21 @@ export interface HostBridge {
   applyEdits(edits: { find: string; replace: string }[]): { applied: number; problems: string[] };
   insert(text: string): boolean;
   readSiteFile(path: string): Promise<string | null>;
+  /** Selects a range of the post text and scrolls to it. */
+  select?(from: number, to: number): boolean;
+  /** The site's posts and notes. */
+  sitePosts?(): SitePost[];
+  /** Saves the open post; resolves false if nothing was saved. */
+  save?(): Promise<boolean>;
+  /** A one-line text prompt; null if cancelled. */
+  input?(title: string, value?: string): Promise<string | null>;
+  /** A system notification, shown only while the editor is in the background; resolves true if one was shown. */
+  alert?(title: string, body?: string): Promise<boolean>;
+  /** Speech recognition, one listener at a time. */
+  speech?: {
+    start(lang: string | undefined, onResult: (text: string, final: boolean) => void, onEnd: (error?: string) => void): void;
+    stop(): void;
+  };
   /** Starts an assistant run; throws with a reason if the assistant isn't ready. */
   prompt(text: string, label: string): void;
   notify(message: string, level: "info" | "warning" | "error"): void;
@@ -59,7 +76,8 @@ export interface WorkerLike extends Port {
 }
 
 export interface HostOptions {
-  createWorker?: (name: string) => WorkerLike;
+  /** `network` is whether the extension may use the network (its worker's CSP allows it). */
+  createWorker?: (name: string, network: boolean) => WorkerLike;
   /** Per-extension key/value storage. Defaults to IndexedDB. */
   storage?: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> };
   timeouts?: Partial<Record<"load" | "tool" | "hook" | "command", number>>;
@@ -94,10 +112,12 @@ interface Running {
 
 export class ExtensionHost extends EventTarget {
   private running = new Map<string, Running>();
+  /** The extension using speech recognition, if any. */
+  private listening?: string;
   private changeQueued = false;
   private readonly timeouts: typeof TIMEOUTS;
   private readonly storage: NonNullable<HostOptions["storage"]>;
-  private readonly createWorker: (name: string) => WorkerLike;
+  private readonly createWorker: (name: string, network: boolean) => WorkerLike;
   /** Messages a panel iframe posts are routed by its window. */
   private panelWindows = new Map<Window, { id: string; panel: string }>();
 
@@ -109,7 +129,7 @@ export class ExtensionHost extends EventTarget {
     this.timeouts = { ...TIMEOUTS, ...options.timeouts };
     this.storage = options.storage ?? { get: (k) => idbGet(k), set: (k, v) => idbSet(k, v) };
     this.createWorker =
-      options.createWorker ?? ((name) => new Worker(new URL("./worker.ts", import.meta.url), { type: "module", name }) as unknown as WorkerLike);
+      options.createWorker ?? ((name, network) => new Worker(workerUrl(network), { type: "module", name }) as unknown as WorkerLike);
   }
 
   // ---- Lifecycle ---------------------------------------------------------------
@@ -129,6 +149,7 @@ export class ExtensionHost extends EventTarget {
   stop(id: string) {
     const ext = this.running.get(id);
     if (!ext) return;
+    if (this.listening === id) this.bridge.speech?.stop();
     ext.worker.terminate();
     for (const { reject, timer } of ext.pending.values()) {
       clearTimeout(timer);
@@ -150,7 +171,7 @@ export class ExtensionHost extends EventTarget {
 
   private start(record: ExtensionRecord): Promise<void> {
     const { manifest } = record;
-    const worker = this.createWorker(`extension:${manifest.id}`);
+    const worker = this.createWorker(`extension:${manifest.id}`, manifest.permissions.includes("network"));
     const ext: Running = {
       record,
       worker,
@@ -299,8 +320,38 @@ export class ExtensionHost extends EventTarget {
         this.changed();
         return;
       }
+      case "document.select": {
+        const from = Math.max(0, Math.floor(Number(p.from) || 0));
+        const to = p.to === undefined ? from : Math.max(from, Math.floor(Number(p.to) || 0));
+        return this.bridge.select?.(from, to) ?? false;
+      }
+      case "document.save":
+        return (await this.bridge.save?.()) ?? false;
+      case "ui.input":
+        return this.need(this.bridge.input)(`${name}: ${String(p.title ?? "")}`, p.value === undefined ? undefined : String(p.value));
+      case "ui.alert":
+        return (await this.bridge.alert?.(`${name}: ${String(p.title ?? "")}`, p.body === undefined ? undefined : String(p.body))) ?? false;
+      case "speech.start": {
+        const speech = this.need(this.bridge.speech);
+        const id = ext.record.manifest.id;
+        this.listening = id;
+        speech.start(
+          typeof p.lang === "string" ? p.lang : undefined,
+          (text, final) => this.emitTo(id, "speech:result", { text, final }),
+          (error) => {
+            if (this.listening === id) this.listening = undefined;
+            this.emitTo(id, "speech:end", error ? { error } : {});
+          },
+        );
+        return;
+      }
+      case "speech.stop":
+        if (this.listening === ext.record.manifest.id) this.bridge.speech?.stop();
+        return;
       case "site.readFile":
         return this.bridge.readSiteFile(String(p.path ?? ""));
+      case "site.posts":
+        return this.bridge.sitePosts?.() ?? [];
       case "ui.notify":
         this.bridge.notify(`${name}: ${String(p.message ?? "")}`, (p.level as "info") ?? "info");
         return;
@@ -421,9 +472,15 @@ export class ExtensionHost extends EventTarget {
     });
   }
 
+  /** An event for one extension only (speech results go to the one listening). */
+  private emitTo(id: string, event: EditorEvent, data: unknown) {
+    const ext = this.running.get(id);
+    if (ext?.status === "running") this.post(ext, { type: "event", name: event, data });
+  }
+
   /** Tells every extension that may see it about an editor event. */
   emit(event: EditorEvent, data?: unknown) {
-    const postEvent = event.startsWith("post:");
+    const postEvent = event.startsWith("post:") || event === "selection";
     // Annotations belong to one post; extensions send new ones for the next.
     if (event === "post:open" || event === "post:close") {
       for (const ext of this.running.values()) ext.annotations.clear();
@@ -578,6 +635,20 @@ export function matchesKey(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" 
   const ctrl = mods.has("ctrl") || (!mac && mods.has("mod"));
   const meta = mods.has("meta") || mods.has("cmd") || (mac && mods.has("mod"));
   return e.key.toLowerCase() === base && e.ctrlKey === ctrl && e.metaKey === meta && e.altKey === mods.has("alt") && e.shiftKey === mods.has("shift");
+}
+
+/**
+ * Built, the worker is served from a path whose Content-Security-Policy blocks
+ * the network unless the extension asked for it (see public/_headers and
+ * vite.config.ts). In development there is no such header, and the runtime's
+ * removal of the network APIs is all there is.
+ */
+function workerUrl(network: boolean): URL {
+  if (!import.meta.env.PROD) return new URL(bundledWorker, location.href);
+  // The build copies the bundled worker to both paths; its hashed name keeps caches honest across deploys.
+  const url = new URL(`/extension-worker/${network ? "network" : "sandboxed"}.js`, location.href);
+  url.searchParams.set("v", bundledWorker.split("/").pop() ?? "");
+  return url;
 }
 
 function isMac(): boolean {

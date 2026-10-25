@@ -36,6 +36,7 @@ export function checkManifest(value: unknown): ExtensionManifest {
     name: m.name.trim().slice(0, 60),
     ...(typeof m.description === "string" ? { description: m.description.slice(0, 300) } : {}),
     ...(typeof m.version === "string" ? { version: m.version.slice(0, 20) } : {}),
+    ...(m.enabledByDefault === false ? { enabledByDefault: false } : {}),
     permissions: [...new Set(permissions as Permission[])],
   };
 }

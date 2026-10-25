@@ -1,6 +1,6 @@
 # Writing editor extensions
 
-An extension is one JavaScript module (ES2022, no imports, no build step). It runs in its own Web Worker: it has no DOM, no `window`, no folder access, and no network unless its manifest asks for `"network"`. It does everything through the `editor` object it is given, and the editor checks every call against the permissions in its manifest.
+An extension is one JavaScript module (ES2022, no imports, no build step). It runs in its own Web Worker: it has no DOM, no `window`, no folder access, and no network unless its manifest asks for `"network"` (the worker's Content-Security-Policy blocks it, and `import()` of other scripts is blocked for every extension). It does everything through the `editor` object it is given, and the editor checks every call against the permissions in its manifest.
 
 ## Shape
 
@@ -39,12 +39,14 @@ Rules:
 | Permission | Allows |
 | --- | --- |
 | `post:read` | `editor.document.*` reads, post events, `document.annotate` (with `ui`) |
-| `post:write` | `document.applyEdits`, `document.insert` (undoable, never saved for the author) |
-| `site:read` | `editor.site.readFile(path)` |
+| `post:write` | `document.applyEdits`, `document.insert` (undoable), `document.save` |
+| `site:read` | `editor.site.readFile(path)`, `editor.site.posts()` |
 | `ui` | commands, toolbar buttons, status items, notices, dialogs, panels |
 | `agent` | tools, skills, quick edits, system prompt sections, `agent.prompt` |
 | `agent:hooks` | `agent.onToolCall`, `agent.onToolResult` (see and change every assistant tool call) |
-| `network` | `fetch`, `WebSocket`, `EventSource` in the worker |
+| `network` | `fetch`, `WebSocket`, `EventSource` in the worker (https, wss, and localhost) |
+| `notifications` | `ui.alert`: system notifications while the editor is in the background |
+| `microphone` | `editor.speech`: dictation with the browser's speech recognition |
 
 Ask for the fewest permissions that do the job. A call without its permission rejects with an error naming the missing permission.
 
@@ -77,21 +79,27 @@ All offsets (selection, annotations) are character offsets into `text`.
 | `post:change` | the post snapshot, after the author stops typing for a moment (about 300 ms) |
 | `post:save` | the post snapshot, after a save |
 | `post:close` | `null`, when no post is open any more |
+| `selection` | `{ from, to, text }` once the selection settles (offsets in `text`); `editor.document.post.selection` follows it |
 | `agent:run-start` | `null`, when the assistant starts working |
-| `agent:run-end` | `null`, when it finishes |
+| `agent:run-end` | `{ text, error? }`: the assistant's last answer, when it finishes |
+| `speech:result` | `{ text, final }` for each piece of dictation (only to the extension that called `speech.start`) |
+| `speech:end` | `{ error? }` when dictation stops |
 
 ## editor.document
 
 - `editor.document.post`: the snapshot from the last event (or `null`). Synchronous.
 - `editor.document.text`: shorthand for `editor.document.post?.text ?? ""`.
 - `await editor.document.read()`: the current snapshot from the editor (use it inside tools).
-- `await editor.document.applyEdits([{ find, replace }])` (`post:write`): each `find` must occur exactly once in `text`, inside the body (front matter can't be edited by extensions). Returns `{ applied, problems }`. Edits go through the editor's undo history.
+- `await editor.document.applyEdits([{ find, replace }])` (`post:write`): each `find` must occur exactly once in `text`, inside the body (front matter can't be edited by extensions; ask the assistant with `agent.prompt` to propose such a change). Returns `{ applied, problems }`. Edits go through the editor's undo history.
 - `await editor.document.insert(text)` (`post:write`): inserts at the cursor, replacing the selection.
+- `await editor.document.select(from, to?)` (`post:read` + `ui`): selects that range of the body, scrolls to it and focuses the editor. Returns `false` for a range in the front matter.
+- `await editor.document.save()` (`post:write`): saves the post, as Ctrl/⌘+S does. Returns `true` if it saved.
 - `await editor.document.annotate(set, annotations)` (`post:read` + `ui`): underlines ranges of the post, with a note on hover. `set` names a group (say `"long-sentences"`); calling it again replaces that group, and `[]` clears it. Each annotation is `{ from, to, severity: "info" | "warning" | "error", message }`. At most 500 per set. Annotations follow edits until you send new ones.
 
 ## editor.site
 
 - `await editor.site.readFile(path)` (`site:read`): the text of a file in the site folder, by path from the site root (`data/stats.json`, `static/demo/data.csv`, `hugo.toml`), or `null` if there is none.
+- `await editor.site.posts()` (`site:read`): every post and note as `{ path, url, title, section, date?, draft, tags, categories }`.
 
 ## editor.ui
 
@@ -99,10 +107,12 @@ All need `ui`.
 
 - `editor.ui.notify(message, level?)`: a short notice in the status bar. `level` is `"info"` (default), `"warning"` or `"error"`.
 - `await editor.ui.confirm(title, message?)`: `true` if the author agrees.
-- `await editor.ui.pick(title, items)`: one of `items` (strings), or `null` if the author cancels.
+- `await editor.ui.pick(title, items)`: one of `items` (strings, at most 100), or `null` if the author cancels.
+- `await editor.ui.input(title, value?)`: a line of text the author types, or `null` if they cancel.
+- `await editor.ui.alert(title, body?)` (`notifications`): a system notification, shown only while the editor is in the background (the first one asks the author's permission). Returns `true` if it was shown.
 - `const s = editor.ui.status(id, text, title?)`: an item in the status bar. `s.set(text, title?)` changes it, `s.set("")` hides it, `s.remove()` removes it. Keep `text` under 80 characters; `title` is the hover text.
 - `editor.ui.toolbarButton({ id, label, title?, run })`: a button in the editor toolbar. Returns a function that removes it.
-- `editor.registerCommand({ id, title, key?, run })`: a command in the toolbar's Extensions menu. `key` is a CodeMirror-style shortcut: `"Mod-Shift-l"` (Mod is ⌘ on a Mac, Ctrl elsewhere), `"Alt-k"`, `"Ctrl-Enter"`. Returns a function that removes it.
+- `editor.registerCommand({ id, title, key?, run })`: a command in the command palette (Ctrl/⌘+Shift+P, or Commands… in the toolbar). `key` is a CodeMirror-style shortcut: `"Mod-Shift-l"` (Mod is ⌘ on a Mac, Ctrl elsewhere), `"Alt-k"`, `"Ctrl-Enter"`. Returns a function that removes it.
 - `const panel = editor.ui.panel({ id, title, html? })`: a tab in the side panel next to Preview and Assistant. It shows `html` as a whole page in a sandboxed iframe (scripts run; no access to the editor page, its storage or the network beyond what the page itself loads).
   - `await panel.render(html)`: replaces the page.
   - `panel.onMessage(handler)`: messages the page sends with `parent.postMessage(data, "*")`.
@@ -127,6 +137,13 @@ All need `agent`, except the hooks, which need `agent:hooks`. Tools run in the e
 - `await editor.agent.prompt(text, label?)`: starts an assistant run with `text`, shown in the chat as `label`.
 - `editor.agent.onToolCall(({ tool, args }) => …)` (`agent:hooks`): runs before every tool call. Return `{ block: "reason" }` to stop it, `{ args: {...} }` to replace its arguments, or nothing to let it run. It has 4 seconds; on timeout or error the call goes ahead.
 - `editor.agent.onToolResult(({ tool, args, result }) => …)` (`agent:hooks`): runs after every tool call, with `result` as `{ text, isError }`. Return a new `{ text, isError? }` (or a string) to replace it, or nothing to keep it.
+
+## editor.speech
+
+Needs `microphone`. One extension listens at a time; starting takes the microphone from another.
+
+- `await editor.speech.start({ lang? })`: starts dictation (`lang` defaults to the browser's language). Rejects where the browser has no speech recognition. Results arrive as `speech:result` events; `speech:end` follows when it stops.
+- `await editor.speech.stop()`.
 
 ## editor.storage
 

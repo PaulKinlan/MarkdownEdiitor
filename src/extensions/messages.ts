@@ -8,10 +8,17 @@ export interface Methods {
   "document.applyEdits": { params: { edits: { find: string; replace: string }[] }; result: { applied: number; problems: string[] } };
   "document.insert": { params: { text: string }; result: boolean };
   "document.annotate": { params: { set: string; annotations: import("./types").Annotation[] }; result: void };
+  "document.select": { params: { from: number; to?: number }; result: boolean };
+  "document.save": { params: Record<string, never>; result: boolean };
   "site.readFile": { params: { path: string }; result: string | null };
+  "site.posts": { params: Record<string, never>; result: import("./types").SitePost[] };
   "ui.notify": { params: { message: string; level?: "info" | "warning" | "error" }; result: void };
   "ui.confirm": { params: { title: string; message?: string }; result: boolean };
   "ui.pick": { params: { title: string; items: string[] }; result: string | null };
+  "ui.input": { params: { title: string; value?: string }; result: string | null };
+  "ui.alert": { params: { title: string; body?: string }; result: boolean };
+  "speech.start": { params: { lang?: string }; result: void };
+  "speech.stop": { params: Record<string, never>; result: void };
   "ui.status": { params: { id: string; text: string | null; title?: string }; result: void };
   "ui.panel.render": { params: { id: string; html: string }; result: void };
   "ui.panel.post": { params: { id: string; message: unknown }; result: void };
@@ -42,10 +49,17 @@ export const METHOD_PERMISSIONS: Record<Method, Permission[]> = {
   "document.applyEdits": ["post:write"],
   "document.insert": ["post:write"],
   "document.annotate": ["post:read", "ui"],
+  "document.select": ["post:read", "ui"],
+  "document.save": ["post:write"],
   "site.readFile": ["site:read"],
+  "site.posts": ["site:read"],
   "ui.notify": ["ui"],
   "ui.confirm": ["ui"],
   "ui.pick": ["ui"],
+  "ui.input": ["ui"],
+  "ui.alert": ["notifications"],
+  "speech.start": ["microphone"],
+  "speech.stop": ["microphone"],
   "ui.status": ["ui"],
   "ui.panel.render": ["ui"],
   "ui.panel.post": ["ui"],

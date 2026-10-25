@@ -30,6 +30,10 @@ export type Permission =
   | "agent:hooks"
   /** fetch() and WebSockets from the worker. */
   | "network"
+  /** Notifications from the operating system when the editor is in the background. */
+  | "notifications"
+  /** Speech recognition from the microphone. */
+  | "microphone"
   /** List, read and install extensions. Only built-in extensions can have it. */
   | "extensions";
 
@@ -41,6 +45,8 @@ export const PERMISSIONS: Record<Permission, string> = {
   agent: "Add tools, skills and quick edits to the assistant",
   "agent:hooks": "See and change every assistant tool call",
   network: "Connect to the network",
+  notifications: "Show system notifications",
+  microphone: "Listen to the microphone for dictation",
   extensions: "Install and change extensions (built-in only)",
 };
 
@@ -51,6 +57,8 @@ export interface ExtensionManifest {
   description?: string;
   version?: string;
   permissions: Permission[];
+  /** For built-in extensions: false leaves it off until the author turns it on. */
+  enabledByDefault?: boolean;
 }
 
 /** Where an extension came from. */
@@ -133,6 +141,29 @@ export interface PostSnapshot {
   unsaved: boolean;
 }
 
-export type EditorEvent = "post:open" | "post:change" | "post:save" | "post:close" | "agent:run-start" | "agent:run-end";
+/** A post or note in the open site, as `editor.site.posts()` lists it. */
+export interface SitePost {
+  path: string;
+  url: string;
+  title: string;
+  section: string;
+  date?: string;
+  draft: boolean;
+  tags: string[];
+  categories: string[];
+}
+
+export type EditorEvent =
+  | "post:open"
+  | "post:change"
+  | "post:save"
+  | "post:close"
+  /** The selection settled: `{ from, to, text }`, offsets in the post text. */
+  | "selection"
+  | "agent:run-start"
+  | "agent:run-end"
+  /** Only to the extension that called `speech.start()`. */
+  | "speech:result"
+  | "speech:end";
 
 export type { ToolOutcome };
