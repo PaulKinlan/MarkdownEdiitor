@@ -22,7 +22,12 @@ async function skills() {
     const text = await readFile(join(SKILLS_DIR, entry.name, "SKILL.md"), "utf8").catch(() => undefined);
     if (text === undefined) continue;
     const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const order = Number((match && parse(match[1])?.order) ?? 1000);
+    let order;
+    try {
+      order = Number((match && parse(match[1])?.order) ?? 1000);
+    } catch (e) {
+      throw new Error(`src/skills/${entry.name}/SKILL.md: ${e instanceof Error ? e.message : e}`);
+    }
     files.push({ name: entry.name, order, text });
   }
   files.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
