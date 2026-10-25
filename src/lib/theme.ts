@@ -6,6 +6,8 @@
 export type Theme = "system" | "light" | "dark";
 
 const KEY = "md-editor:color-scheme";
+/** Matches the theme-color metas in index.html (the side bars' background). */
+const CHROME = { light: "#f5f5f3", dark: "#1d1e22" };
 
 export function getTheme(): Theme {
   try {
@@ -29,6 +31,10 @@ export function setTheme(theme: Theme) {
 function apply(theme: Theme) {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
   if (meta) meta.content = theme === "system" ? "light dark" : theme;
+  // Each theme-color meta matches one OS scheme; a pinned theme gives both its own colour.
+  for (const m of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"][data-scheme]')) {
+    m.content = CHROME[theme === "system" ? (m.dataset.scheme as "light" | "dark") : theme];
+  }
 }
 
 /** Keeps other windows of the app in step when the theme changes in one. */

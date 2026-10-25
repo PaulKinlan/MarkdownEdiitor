@@ -35,7 +35,8 @@ export class AgentPanel extends LitElement {
       .assistant.partial { color: var(--fg-2); }
       .error { color: var(--danger); font-size: 13px; }
       .tool { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .tool.error { color: var(--danger); }
+      /* Failures wrap so the reason is never clipped. */
+      .tool.error { color: var(--danger); white-space: normal; overflow-wrap: anywhere; }
       .edit { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); padding: 10px 12px; display: grid; gap: 8px; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
       .edit.accepted { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); opacity: 0.7; }
       .edit.rejected, .edit.stale { opacity: 0.55; }

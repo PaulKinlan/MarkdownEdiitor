@@ -31,7 +31,7 @@ const markdownHighlight = HighlightStyle.define([
   { tag: t.url, color: "var(--fg-2)" },
   { tag: t.monospace, fontFamily: "var(--mono)", fontSize: "0.9em" },
   // Markdown syntax (#, *, >, backticks) recedes so the words stand out.
-  { tag: [t.processingInstruction, t.meta], color: "color-mix(in srgb, var(--fg-2) 70%, transparent)" },
+  { tag: [t.processingInstruction, t.meta], color: "var(--fg-2)" },
   { tag: t.quote, color: "var(--fg-2)", fontStyle: "italic" },
   { tag: t.contentSeparator, color: "var(--fg-2)" },
 ]);

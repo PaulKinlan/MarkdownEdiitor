@@ -46,7 +46,7 @@ export const controls = css`
   }
   input:not([type="checkbox"], [type="radio"]), select { min-height: var(--control-h); }
   input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--fg) 25%, var(--border)); }
-  input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--fg-2) 75%, transparent); }
+  input::placeholder, textarea::placeholder { color: var(--fg-2); opacity: 1; }
   input:focus-visible, select:focus-visible, textarea:focus-visible {
     outline: none;
     border-color: var(--accent);
