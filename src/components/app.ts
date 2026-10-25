@@ -32,6 +32,8 @@ import "./md-editor";
 import "./frontmatter-form";
 import "./preview-pane";
 import "./agent-panel";
+import "./tools-settings";
+import type { ToolsSettings } from "./tools-settings";
 
 interface OpenPost {
   summary: PostSummary;
@@ -220,11 +222,14 @@ export class MdApp extends LitElement {
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
   private writing = 0;
   @state() private agentServerUp = false;
+  /** The agent server has a key for web_search (DeepSeek, Brave or Tavily). */
+  @state() private serverWebSearch = false;
 
   @query("md-editor") private editor?: MdEditor;
   @query("preview-pane") private preview?: PreviewPane;
   @query("#new-post") private newPostDialog?: HTMLDialogElement;
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
+  @query("tools-settings") private toolsSettings?: ToolsSettings;
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
   // Bumped on each site or post load, so a slow load that finishes after the user moved on is dropped.
@@ -725,7 +730,9 @@ export class MdApp extends LitElement {
     let server: ModelInfo[] = [];
     let failed = "";
     try {
-      server = (await fetchAgentConfig(this.agentSettings)).models;
+      const config = await fetchAgentConfig(this.agentSettings);
+      server = config.models;
+      this.serverWebSearch = config.webSearch;
     } catch (e) {
       failed = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -1288,6 +1295,7 @@ export class MdApp extends LitElement {
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
+              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.toolsSettings?.show()}>Tools and MCP servers…</button></div>
               <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
@@ -1298,6 +1306,7 @@ export class MdApp extends LitElement {
             </form>`
           : nothing}
       </dialog>
+      <tools-settings .agentSettings=${this.agentSettings} ?webSearch=${this.serverWebSearch}></tools-settings>
     `;
   }
 

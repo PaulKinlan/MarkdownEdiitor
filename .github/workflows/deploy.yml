@@ -8,7 +8,8 @@ name: Deploy
 #
 # Needs repository secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
 # CLOUDFLARE_ACCOUNT_ID. Without them, the workflow still builds and tests.
-# Agent secrets (model API keys, search keys, EDITOR_TOKEN) set as repository
+# Agent secrets (model API keys, search keys, EDITOR_TOKEN; CLAUDE_API_KEY works
+# as the Anthropic key) set as repository
 # secrets are copied to each Worker on deploy. Preview Workers also get the
 # scripted demo model, so the agent loop can be tried without spending tokens.
 
@@ -76,9 +77,22 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          name="${{ steps.target.outputs.name }}"
           extra=""
           if [ "${{ github.ref_name }}" != "main" ]; then extra="--var DEMO_MODEL:1"; fi
-          npx wrangler deploy --name "${{ steps.target.outputs.name }}" $extra | tee deploy.log
+          deploy() { npx wrangler deploy --name "$name" $extra 2>&1 | tee deploy.log; }
+          if ! deploy; then
+            # A preview that applied this branch's migration before main added its own (merged in later) can't
+            # apply main's: Cloudflare only runs migrations after the last tag it applied. Previews are
+            # disposable, so start this one again from scratch.
+            if [ "${{ github.ref_name }}" != "main" ] && grep -q "code: 10061" deploy.log; then
+              echo "::warning::Durable Object migrations on $name are out of order; deleting and redeploying the preview."
+              npx wrangler delete --name "$name" --force
+              deploy
+            else
+              exit 1
+            fi
+          fi
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
@@ -88,7 +102,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # CLAUDE_API_KEY is accepted as another name for the Anthropic key.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

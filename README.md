@@ -24,7 +24,9 @@ The **Assistant** tab next to the preview opens an agent conversation about the 
 - **Skills from GitHub.** In "All skills", paste `owner/repo` or a link to a skill's folder (for example `vstaln/noslop`). Every folder with a `SKILL.md` is installed, with the text files next to it (reference docs the instructions point to), either into the site folder's `.agents/skills/` (so git tracks it) or for all sites in this browser. Installed skills can be updated from GitHub or removed. The agent reads supporting files with `load_skill({ name, file })`.
 - **Your own skills.** Put a `SKILL.md` in `.agents/skills/<name>/` or `.claude/skills/<name>/` in the site folder, the same layout coding agents use. It has YAML front matter with `name` and `description` (and optionally `title` for the button and `scope`: `post`, `site` or `both`), then the instructions in markdown. A site skill with a built-in skill's name replaces it.
 - **Suggestions, not rewrites.** The agent changes the post only through `propose_edits`, find/replace pairs checked against the current text. Each one shows as a word diff to accept or reject. Accepted body edits go through the editor, so Ctrl/⌘+Z undoes them. Nothing is written to disk until you save.
-- **Tools.** `read_post` and `propose_edits`. `search_posts` and `read_past_post` work over a full-text index of the site, kept in a per-site `SiteIndex` Durable Object that the editor syncs, uploading only changed files. `web_search` (Brave or Tavily) and `fetch_url` are available when a search key is set. For skills: `analyze_post` (length, outline, long sentences, vague links, missing alt text, front matter lengths), `calculate` (exact arithmetic), `table_stats` (column statistics for a markdown table or CSV) and `browser_support` (Chrome Status and webstatus.dev).
+- **Tools.** `read_post` and `propose_edits`. `search_posts` and `read_past_post` work over a full-text index of the site, kept in a per-site `SiteIndex` Durable Object that the editor syncs, uploading only changed files. `web_search` and `fetch_url` use DeepSeek Search and Fetch when `DEEPSEEK_API_KEY` is set (or Brave/Tavily for search when those keys are set), for every model. For skills: `analyze_post` (length, outline, long sentences, vague links, missing alt text, front matter lengths), `calculate` (exact arithmetic), `table_stats` (column statistics for a markdown table or CSV) and `browser_support` (Chrome Status and webstatus.dev).
+- **The model's own web tools.** Claude models search and read pages with Anthropic's server-side `web_search` and `web_fetch`, and OpenAI models with their `web_search`, in place of the editor's two tools. Turn this off under Settings → Assistant → Tools and MCP servers.
+- **Your own tools.** The same dialog adds remote MCP servers (Streamable HTTP, with a token in a header) and plain HTTP APIs, with ready-made Brave Search, Tavily and Jina Reader tools. They live in a `ToolStore` Durable Object on the agent server, so every device and every agent gets them. Keys go in and never come back out to the browser.
 - **Site rules.** A `CLAUDE.md` or `AGENTS.md` at the site root (aifoc.us has one) is sent as the site's writing rules and goes into the agent's system prompt.
 
 ### The site assistant
@@ -45,8 +47,8 @@ Set these as Worker secrets (`wrangler secret put NAME`), or as GitHub repositor
 
 | Secret | |
 |---|---|
-| `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Any one is enough |
-| `BRAVE_API_KEY` or `TAVILY_API_KEY` | Enables `web_search` |
+| `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Any one is enough. The deploy also accepts a `CLAUDE_API_KEY` repository secret as the Anthropic key, and the Live tools workflow uses it to check Claude's web search and fetch. |
+| `DEEPSEEK_API_KEY`, `BRAVE_API_KEY` or `TAVILY_API_KEY` | Enables `web_search` (the first set of Brave, Tavily, DeepSeek). DeepSeek also backs `fetch_url`. |
 | `EDITOR_TOKEN` | Requires this token on every `/api` call. Set it in the editor under Settings → Assistant. **Set this (or put the Worker behind Cloudflare Access) before adding model keys**, or anyone with the URL can spend them. |
 | `ALLOWED_ORIGINS` | Comma-separated editor origins that may call this API from another origin, when the Assistant's agent server setting points here. |
 
@@ -135,6 +137,9 @@ worker/agent/skills.ts   The skills extension: skill catalog section and load_sk
 worker/agent/research.ts calculate, table_stats and browser_support (both scopes)
 worker/agent/post-stats.ts  analyze_post
 worker/agent/site-index.ts  SiteIndex Durable Object (SQLite FTS5, full files and front matter)
+src/shared/tools.ts      Tool settings shared by the editor and the Worker: MCP servers, HTTP tools, presets
+worker/tools/            The tool registry both sessions install: ToolStore Durable Object, MCP client,
+                         HTTP tools, and the providers' native web tools (installConfiguredTools, addNativeWebTools)
 ```
 
 ## Plan

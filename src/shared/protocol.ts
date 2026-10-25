@@ -11,6 +11,8 @@ export interface ModelInfo extends ModelRef {
   name: string;
   reasoning: boolean;
   contextWindow: number;
+  /** Answers with the provider's own server-side web search when native web tools are on. */
+  nativeWebSearch?: boolean;
 }
 
 /** What the agent knows about the post being edited. Sent on connect and whenever it changes. */
