@@ -112,7 +112,7 @@ export class SkillsDialog extends LitElement {
     return html`<dialog closedby="any" aria-labelledby="skills-title" @click=${lightDismiss}>
       <header>
         <h3 id="skills-title">Skills</h3>
-        <p class="muted" style="margin:0">Skills are instructions the assistant loads when a task needs them. Run one on this post, or just ask for it in chat.</p>
+        <p class="muted">Skills are instructions the assistant loads when a task needs them. Run one on this post, or just ask for it in chat.</p>
         <input type="search" placeholder="Filter skills" aria-label="Filter skills" .value=${this.filter} @input=${(e: Event) => (this.filter = (e.target as HTMLInputElement).value)} />
       </header>
       <ul>
