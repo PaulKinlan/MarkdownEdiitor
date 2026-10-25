@@ -1,0 +1,9 @@
+# Cloudflare static asset headers.
+# The service worker and manifest must be revalidated on every check, or an
+# update can sit unseen behind a cached copy. Built files have hashed names.
+/sw.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
