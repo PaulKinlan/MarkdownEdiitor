@@ -68,7 +68,7 @@ describe("manifest parsing", () => {
   });
 
   it("parses the built-in extensions", () => {
-    expect(builtinExtensions().map((r) => r.manifest.id)).toEqual(["readability", "data-checker", "extension-builder"]);
+    expect(builtinExtensions().map((r) => r.manifest.id)).toEqual(["word-count", "readability", "data-checker", "extension-builder"]);
   });
 });
 
@@ -166,10 +166,10 @@ describe("extension host", () => {
     const log: string[] = [];
     const host = new ExtensionHost(bridge(snapshot(text), log), { createWorker: fakeWorker, storage: memory() });
     await host.run(builtinExtensions());
-    await until(() => host.statuses.length === 2 && host.annotations.length > 0);
+    await until(() => host.statuses.length === 3 && host.annotations.length > 0);
     expect(host.status("readability").status).toBe("running");
     expect(host.status("data-checker").status).toBe("running");
-    expect(host.statuses.map((s) => s.spec.text)).toEqual([expect.stringMatching(/^Grade \d+\.\d$/), "4 claims"]);
+    expect(host.statuses.map((s) => s.spec.text)).toEqual([expect.stringMatching(/^\d+ words · 1 min read$/), expect.stringMatching(/^Grade \d+\.\d$/), "4 claims"]);
     expect(host.annotations).toHaveLength(1);
     expect(text.slice(host.annotations[0].from, host.annotations[0].to)).toMatch(/^This sentence .* again\.$/);
 

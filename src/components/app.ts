@@ -1436,15 +1436,15 @@ export class MdApp extends LitElement {
   }
 
   private renderStatus() {
-    const words = this.open ? (this.open.post.body.match(/[\p{L}\p{N}’']+/gu) ?? []).length : 0;
+    // Word count, reading time and the like come from extensions (see extensions/builtin).
+    const statuses = this.extensions.host.statuses.filter((s) => s.spec.text);
     return html`<div class="status" role="status">
       ${this.open ? html`<span class=${this.dirty ? "dirty" : ""}><span class="dot"></span>${this.dirty ? "Unsaved changes" : "Saved"}</span>` : nothing}
       ${this.error ? html`<span class="error">${this.error}</span>` : nothing}
       ${this.message ? html`<span>${this.message}</span>` : nothing}
       ${this.indexStatus ? html`<span>${this.indexStatus}</span>` : nothing}
 
-      ${this.open ? html`<span class="end">${words.toLocaleString()} words · ${Math.max(1, Math.round(words / 230))} min read</span>` : nothing}
-      ${this.extensions.host.statuses.filter((s) => s.spec.text).map((s) => html`<span title=${s.spec.title ?? s.name}>${s.spec.text}</span>`)}
+      ${statuses.map((s, i) => html`<span class=${i === 0 ? "end" : ""} title=${s.spec.title ?? s.name}>${s.spec.text}</span>`)}
     </div>`;
   }
 

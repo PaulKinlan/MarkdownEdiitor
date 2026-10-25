@@ -6,6 +6,7 @@
 import type { ExtensionRecord } from "../types";
 import { parseExtension } from "../loader";
 import text from "./text.js?raw";
+import wordCount from "./word-count.js?raw";
 import readability from "./readability.js?raw";
 import dataChecker from "./data-checker.js?raw";
 import builder from "./extension-builder.js?raw";
@@ -16,7 +17,7 @@ export function withHelpers(source: string, helpers = text): string {
   return `${inlined}\n${source.replace(/^import \{[^}]*\} from "\.\/text\.js";\n/m, "")}`;
 }
 
-export const BUILTIN_SOURCES = [readability, dataChecker].map((s) => withHelpers(s)).concat(builder.replace('"__API_REFERENCE__"', JSON.stringify(apiReference)));
+export const BUILTIN_SOURCES = [wordCount, readability, dataChecker].map((s) => withHelpers(s)).concat(builder.replace('"__API_REFERENCE__"', JSON.stringify(apiReference)));
 
 export function builtinExtensions(): ExtensionRecord[] {
   return BUILTIN_SOURCES.map((source) => ({ ...parseExtension(source), origin: "builtin" as const }));
