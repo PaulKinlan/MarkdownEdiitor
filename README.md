@@ -49,6 +49,20 @@ These turn on in Chrome when it has them. Without them the editor works as befor
 - **Tools for browser agents (WebMCP, origin trial in Chrome 149 to 156).** The editor registers `get_current_post`, `list_posts`, `open_post`, `insert_text`, `apply_edits`, `save_post`, `list_edits` and `run_edit`, so an agent in the browser can work with the open post. Its edits are undoable and stay unsaved until a save. To turn it on for the deployed editor, register for the trial and put the token in the `ORIGIN_TRIAL_TOKENS` repository secret (comma-separated for several); the build adds it to the page. A subdomain token for `kinlan-test.workers.dev` also covers the branch previews. Locally, enable WebMCP in `chrome://flags`.
 - **Spell check words (custom dictionary, Chrome 159).** Spell checking is on in the editor (Settings can turn it off). Words listed under Settings → Spell check words, plus the site's tags and categories, aren't marked as misspelled.
 
+## Installing it as an app
+
+The editor is a PWA: install it from Chrome or Edge's address bar and it runs in its own window.
+
+- **Works offline.** The service worker caches the whole build, so the editor opens with no network. Posts live on disk, so editing and saving work offline too; only the assistant and web search need the network.
+- **Updates when you say so.** A new deploy installs in the background, and an **Update** button appears in the top bar. Pressing it saves your post, then reloads into the new version. Until then the open window keeps running the version it started with.
+- **Opens `.md` files.** Once installed, "Open with → Hugo Editor" on a markdown file opens it in the site it belongs to. If the file isn't in a site you've added, the editor offers to add its site folder.
+- **Share to it.** Sharing text or a link to the app (Android and ChromeOS) starts a new post with it.
+- **One window.** Opening a file or a shortcut while the editor is running focuses the existing window, so unsaved edits are never split across two copies.
+- **Title bar.** On desktop, the top bar can take over the window's title bar (the chevron in the title bar toggles it).
+- "New post" is in the app icon's shortcut menu.
+
+The service worker never handles `/api/*` (agent calls and WebSockets) or any other origin, such as the local `hugo server` preview. In Chrome, static routes (Service Worker Static Routing API) send those straight to the network without starting the worker. It is only registered in production builds, so `npm run dev` is unaffected; use `npm run preview` to try it locally.
+
 ## Running it
 
 ```sh
@@ -87,6 +101,9 @@ src/components/          Lit elements: app shell, editor, front matter form, pre
 src/lib/agent-client.ts  WebSocket client for agent sessions, settings
 src/lib/actions.ts       Built-in and custom edits
 src/lib/indexer.ts       Syncs the site's posts to the search index
+src/lib/pwa.ts           Service worker registration and updates, file/share/shortcut launches
+src/sw/service-worker.ts Service worker (built to dist/sw.js by the plugin in vite.config.ts)
+public/                  Web app manifest, icons, Cloudflare _headers
 src/shared/protocol.ts   Messages between the editor and agent sessions
 worker/index.ts          Cloudflare Worker: app assets and /api routes
 worker/agent/session.ts  AgentSession Durable Object (Pi Durable harness per post)
