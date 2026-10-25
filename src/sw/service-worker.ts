@@ -79,7 +79,9 @@ async function navigate(event: FetchEvent): Promise<Response> {
 /** Built files have hashed names, so a cached copy is always right. Misses are cached for offline use. */
 async function fromCache(request: Request): Promise<Response> {
   // Any version's cache: a window still on the previous version needs its files.
-  const cached = (await caches.match(request, { cacheName: CACHE })) ?? (await caches.match(request));
+  // Extension workers are precached without the ?v= the page adds to their URL (src/extensions/host.ts).
+  const ignoreSearch = new URL(request.url).pathname.startsWith("/extension-worker/");
+  const cached = (await caches.match(request, { cacheName: CACHE, ignoreSearch })) ?? (await caches.match(request, { ignoreSearch }));
   if (cached) return cached;
   const response = await fetch(request);
   if (response.ok && new URL(request.url).pathname.startsWith("/assets/")) {

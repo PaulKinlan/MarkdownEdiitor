@@ -1,6 +1,7 @@
 // Messages between the editor (browser) and an agent session (Durable Object).
 
 import type { Skill } from "./skills";
+import type { AgentExtensionSpec, ExtensionCall } from "./extensions";
 
 export interface ModelRef {
   provider: string;
@@ -71,7 +72,11 @@ export type ClientToServer =
   | { type: "site"; site: SiteContext }
   | { type: "prompt"; text: string; model: ModelRef; requestId: string; label?: string }
   | { type: "abort" }
-  | { type: "reset" };
+  | { type: "reset" }
+  /** The editor extensions that are enabled now; replaces the previous set. */
+  | { type: "extensions"; extensions: AgentExtensionSpec[] }
+  /** The answer to an `extension_call`. */
+  | { type: "extension_result"; callId: string; ok: boolean; value?: unknown; error?: string };
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string; label?: string }
@@ -80,7 +85,9 @@ export type ChatItem =
 
 export type ServerToClient =
   | { type: "view"; items: ChatItem[]; busy: boolean; partial?: string; usage?: { cost: number; tokens: number } }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** The agent wants an editor extension to run a tool or hook; answered with `extension_result`. */
+  | { type: "extension_call"; callId: string; call: ExtensionCall };
 
 export interface IndexedPost {
   path: string;

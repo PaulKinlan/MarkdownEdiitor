@@ -7,7 +7,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin
   Reporting-Endpoints: default="/api/reports", csp="/api/reports"
-  Permissions-Policy: accelerometer=(), autoplay=(), browsing-topics=(), camera=(), clipboard-read=(), clipboard-write=(self), display-capture=(), encrypted-media=(), fullscreen=(self), gamepad=(), geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), otp-credentials=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), storage-access=(), sync-xhr=(), usb=(), window-management=(), xr-spatial-tracking=()
+  Permissions-Policy: accelerometer=(), autoplay=(), browsing-topics=(), camera=(), clipboard-read=(), clipboard-write=(self), display-capture=(), encrypted-media=(), fullscreen=(self), gamepad=(), geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(self), midi=(), otp-credentials=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), storage-access=(), sync-xhr=(), usb=(), window-management=(), xr-spatial-tracking=()
   Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
   Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' __SCRIPT_HASHES__; style-src 'self'; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*; font-src 'self'; connect-src 'self' https: wss: ws://localhost:* http://localhost:* http://127.0.0.1:*; frame-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; report-uri /api/reports; report-to csp
 
@@ -19,6 +19,28 @@
   Cache-Control: no-cache
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+# Extension workers. Each extension's code is a blob: module the worker imports,
+# so script-src allows only blob:. The sandboxed one has no network at all. The
+# page's report-only policy doesn't fit a worker, so it is dropped here.
+/extension-worker/sandboxed.js
+  Cache-Control: no-cache
+  ! Content-Security-Policy-Report-Only
+  Content-Security-Policy: default-src 'none'; script-src blob:
+/extension-worker/network.js
+  Cache-Control: no-cache
+  ! Content-Security-Policy-Report-Only
+  Content-Security-Policy: default-src 'none'; script-src blob:; connect-src https: wss: http://localhost:* ws://localhost:*
+
+# Extension panels: the extension's own page, in an iframe sandboxed without
+# allow-same-origin. Inline script and style are the point of a panel, so it
+# gets its own policy in place of the page's: no fetch(), no frames, and it can
+# only be framed by the editor.
+/extension-panel
+  Cache-Control: no-cache
+  ! Content-Security-Policy
+  ! Content-Security-Policy-Report-Only
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 
 /.well-known/traffic-advice
   Content-Type: application/trafficadvice+json

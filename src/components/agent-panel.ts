@@ -107,6 +107,8 @@ export class AgentPanel extends LitElement {
   @property({ attribute: false }) skills: Skill[] = [];
   /** Installs, updates and removes skills; absent where that isn't possible. */
   @property({ attribute: false }) skillManager?: SkillManager;
+  /** Quick edits that editor extensions added, shown after the others. */
+  @property({ attribute: false }) extensionActions: EditAction[] = [];
 
   @state() private custom: EditAction[] = loadCustomActions();
   @state() private error = "";
@@ -367,7 +369,7 @@ export class AgentPanel extends LitElement {
       </div>
       <div class="actions" role="group" aria-label="Edits">
         <span class="kind">Edits</span>
-        ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${`${a.prompt}\n\nText in the message box is sent with it.`} @click=${() => this.runAction(a)}>${a.name}</button>`)}
+        ${[...this.actions, ...this.extensionActions.filter((a) => (a.scope ?? "post") === this.scope)].map((a) => html`<button ?disabled=${busy || !this.connection} title=${`${a.prompt}\n\nText in the message box is sent with it.`} @click=${() => this.runAction(a)}>${a.name}</button>`)}
         <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
       <div class="actions skills" role="group" aria-label="Skills">

@@ -26,12 +26,15 @@ Declared in `public/_headers`. Any change needs an ADR.
 | `clipboard-write` | `self` | Not used yet; kept for copy buttons in the editor and assistant (writing only, never reading) |
 | `fullscreen` | `self` | Not used yet; kept for a distraction-free writing mode |
 | Prompt API, Summarizer (`language-model`, `summarizer`) | default (`self`) | On-device model and draft summaries; not delegated to the preview iframe |
-| Everything else listed (camera, microphone, geolocation, payment, USB, serial, HID, sensors, …) | denied | Not used |
+| `microphone` | `self` | Dictation (Web Speech API), only for extensions the author gave the `microphone` permission (ADR 0003) |
+| Everything else listed (camera, geolocation, payment, USB, serial, HID, sensors, …) | denied | Not used |
 | `connect-src` | `'self' https: wss:` and `localhost` | The agent server can be set to another origin in Settings, and the preview checks the local `hugo server` |
 | `frame-src` | `'self' https:` and `localhost` | The preview server address is user-configured |
 | `img-src` | adds `data: blob:` | Pasted and dropped images before they are saved |
 | `script-src` | `'self'` plus SHA-256 hashes of the two inline pre-paint scripts | No inline or eval |
-| `require-trusted-types-for 'script'` | on | The only script URL sink is the service worker registration, which goes through the `service-worker` policy |
+| `require-trusted-types-for 'script'` | on | Script URL sinks are the service worker registration (`service-worker` policy) and extension workers (`extension-worker`, same origin only) (ADR 0003) |
+| Extension workers | `default-src 'none'; script-src blob:` (enforced), plus `connect-src` for extensions with `network` | An extension reaches the network only if it was given the `network` permission (ADR 0003) |
+| Extension panels (`/extension-panel`) | Own policy: inline script and style, images and fonts; no `connect-src`; `frame-ancestors 'self'`; sandboxed without `allow-same-origin` | A panel is the extension's own page and can't reach the editor (ADR 0003) |
 
 The full CSP is report-only until reports show it is clean in real use (see ADR 0002); `frame-ancestors 'none'`, `object-src 'none'` and `base-uri 'self'` are enforced.
 

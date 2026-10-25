@@ -1,6 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -54,6 +54,35 @@ const shortcodes = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations },
 );
 
+/** A range of the body underlined by an extension, with a note on hover. Offsets are into the body. */
+export interface BodyAnnotation {
+  from: number;
+  to: number;
+  severity?: "info" | "warning" | "error";
+  message: string;
+}
+
+const setAnnotations = StateEffect.define<BodyAnnotation[]>();
+
+/** Extension annotations. They move with edits until the next set replaces them. */
+const annotationField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setAnnotations)) continue;
+      const length = tr.state.doc.length;
+      const ranges = effect.value
+        .filter((a) => a.from < a.to && a.to <= length)
+        .sort((a, b) => a.from - b.from)
+        .map((a) => Decoration.mark({ class: `cm-ext-${a.severity ?? "info"}`, attributes: { title: a.message } }).range(a.from, a.to));
+      deco = Decoration.set(ranges, true);
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
 const editorTheme = EditorView.baseTheme({
   "&": { height: "100%", fontSize: "17px", color: "var(--fg)" },
   ".cm-scroller": { fontFamily: "var(--font-editor)", lineHeight: "1.7", padding: "32px 0 40vh" },
@@ -75,6 +104,10 @@ const editorTheme = EditorView.baseTheme({
     borderRadius: "4px",
     padding: "1px 3px",
   },
+  ".cm-ext-info, .cm-ext-warning, .cm-ext-error": { textDecorationLine: "underline", textDecorationStyle: "wavy", textDecorationThickness: "1px", textUnderlineOffset: "3px" },
+  ".cm-ext-info": { textDecorationColor: "color-mix(in srgb, var(--accent) 70%, transparent)" },
+  ".cm-ext-warning": { textDecorationColor: "var(--warn)" },
+  ".cm-ext-error": { textDecorationColor: "var(--danger)" },
   "@media (max-width: 900px)": {
     ".cm-scroller": { paddingTop: "16px" },
     ".cm-content": { padding: "0 16px" },
@@ -101,6 +134,8 @@ export class MdEditor extends LitElement {
   @property() placeholderText = "Start writing…";
   /** Turns on the browser's spell checker for the document. */
   @property({ type: Boolean }) checkSpelling = true;
+  /** Ranges extensions underline, as body offsets. */
+  @property({ attribute: false }) annotations: BodyAnnotation[] = [];
 
   private view?: EditorView;
   private applying = false;
@@ -112,14 +147,17 @@ export class MdEditor extends LitElement {
       root: this.shadowRoot!,
       state: this.createState(this.value),
     });
+    if (this.annotations.length) this.view.dispatch({ effects: setAnnotations.of(this.annotations) });
   }
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("value") && this.view && this.view.state.doc.toString() !== this.value) {
       this.applying = true;
       this.view.setState(this.createState(this.value));
+      this.view.dispatch({ effects: setAnnotations.of(this.annotations) });
       this.applying = false;
     }
+    if (changed.has("annotations") && this.view) this.view.dispatch({ effects: setAnnotations.of(this.annotations) });
     if (changed.has("checkSpelling") && this.view) {
       this.view.dispatch({ effects: this.spelling.reconfigure(spellingAttributes(this.checkSpelling)) });
     }
@@ -158,6 +196,21 @@ export class MdEditor extends LitElement {
     this.view?.focus();
   }
 
+  /** Selects a range (body offsets), scrolls it into view and focuses the editor. */
+  select(from: number, to = from) {
+    if (!this.view) return;
+    const max = this.view.state.doc.length;
+    const anchor = Math.min(from, max);
+    this.view.dispatch({ selection: { anchor, head: Math.min(to, max) }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
+    this.view.focus();
+  }
+
+  /** The main selection, as body offsets. */
+  get selection(): { from: number; to: number } {
+    const range = this.view?.state.selection.main;
+    return range ? { from: range.from, to: range.to } : { from: 0, to: 0 };
+  }
+
   private createState(doc: string): EditorState {
     const extensions: Extension[] = [
       history(),
@@ -169,6 +222,7 @@ export class MdEditor extends LitElement {
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       placeholder(this.placeholderText),
       shortcodes,
+      annotationField,
       editorTheme,
       this.spelling.of(spellingAttributes(this.checkSpelling)),
       keymap.of([
@@ -183,6 +237,7 @@ export class MdEditor extends LitElement {
           this.value = u.state.doc.toString();
           this.emit("change", { value: this.value });
         }
+        if (u.selectionSet) this.emit("selection-change");
       }),
       EditorView.domEventHandlers({
         drop: (e, view) => this.handleFiles(e.dataTransfer?.files, e, view.posAtCoords({ x: e.clientX, y: e.clientY })),

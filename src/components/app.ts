@@ -21,18 +21,23 @@ import type { Edit, ModelInfo, PostContext, SiteContext } from "../shared/protoc
 import { controls, lightDismiss } from "./shared";
 import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
-import type { MdEditor } from "./md-editor";
 import { BUILTIN_SKILLS } from "../shared/builtin-skills";
 import { mergeSkills, type Skill } from "../shared/skills";
 import { installSiteSkill, loadSiteSkills, removeSiteSkill } from "../lib/site-skills";
 import { fetchSkillsFromGitHub, loadInstalledSkills, refreshSkill, saveInstalledSkills } from "../lib/skill-install";
 import type { SkillManager } from "./skills-dialog";
+import { ExtensionController } from "../extensions/controller";
+import type { PostSnapshot } from "../extensions/types";
+import type { EditAction } from "../lib/actions";
+import type { MdEditor, BodyAnnotation } from "./md-editor";
+import type { ExtensionsDialog } from "./extensions-dialog";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
 import "./frontmatter-form";
 import "./preview-pane";
 import "./agent-panel";
-import "./tools-settings";
+import type { CommandPalette, PaletteCommand } from "./command-palette";
+import { keyLabel } from "../lib/keys";
 import type { ToolsSettings } from "./tools-settings";
 
 interface OpenPost {
@@ -53,6 +58,10 @@ const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
 const NARROW = matchMedia("(max-width: 900px)");
 type MobileView = "posts" | "write" | "preview" | "assistant";
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+
+
+/** public/extension-panel.html. Cloudflare serves it without the extension (and redirects to that), Vite only with it. */
+const PANEL_PAGE = import.meta.env.PROD ? "/extension-panel" : "/extension-panel.html";
 
 @customElement("md-app")
 export class MdApp extends LitElement {
@@ -109,7 +118,9 @@ export class MdApp extends LitElement {
       .toolbar select { font-size: 13px; }
       md-editor { flex: 1; }
       .side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--bg-2); }
-      .side > preview-pane, .side > agent-panel { flex: 1; }
+      .side > preview-pane, .side > agent-panel, .side > .ext-panel { flex: 1; }
+      .ext-panel { border: 0; width: 100%; background: var(--bg); }
+      .tabs .seg { flex-wrap: wrap; }
       .tabs { display: flex; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); }
       .status { display: flex; align-items: center; gap: 14px; padding: 0 12px; min-height: 26px; font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--border); background: var(--bg-2); white-space: nowrap; overflow: hidden; }
       .status > span { display: inline-flex; align-items: center; gap: 6px; }
@@ -191,7 +202,10 @@ export class MdApp extends LitElement {
   @state() private error = "";
   @state() private changedOnDisk = false;
   @state() private showPreview = localStorage.getItem(PREVIEW_KEY) !== "false";
-  @state() private sideTab: "preview" | "assistant" = localStorage.getItem(TAB_KEY) === "assistant" ? "assistant" : "preview";
+  /** "preview", "assistant", or an extension panel as "ext:<extension>:<panel>". */
+  @state() private sideTab: string = localStorage.getItem(TAB_KEY) ?? "preview";
+  /** Bumped when extensions change what they show. */
+  @state() private extensionsVersion = 0;
   @state() private theme: Theme = getTheme();
   @state() private narrow = NARROW.matches;
   @state() private mobileView: MobileView = "posts";
@@ -229,7 +243,28 @@ export class MdApp extends LitElement {
   @query("preview-pane") private preview?: PreviewPane;
   @query("#new-post") private newPostDialog?: HTMLDialogElement;
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
+  @query("extensions-dialog") private extensionsDialog?: ExtensionsDialog;
+  @query("command-palette") private palette?: CommandPalette;
   @query("tools-settings") private toolsSettings?: ToolsSettings;
+
+  // These dialogs are loaded on first use, to keep them out of the boot bundle.
+  private async showExtensions() {
+    await import("./extensions-dialog");
+    await this.updateComplete;
+    this.extensionsDialog?.show();
+  }
+
+  private async openPalette() {
+    await import("./command-palette");
+    await this.updateComplete;
+    this.palette?.open();
+  }
+
+  private async showToolsSettings() {
+    await import("./tools-settings");
+    await this.updateComplete;
+    this.toolsSettings?.show();
+  }
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
   // Bumped on each site or post load, so a slow load that finishes after the user moved on is dropped.
@@ -238,6 +273,53 @@ export class MdApp extends LitElement {
   /** Bumped each time a post is (re)loaded from disk; resets the front matter form. */
   private loadCount = 0;
   private saving: Promise<void> = Promise.resolve();
+
+  private readonly extensions = new ExtensionController({
+    snapshot: () => this.extensionSnapshot(),
+    applyEdits: (edits) => this.extensionEdits(edits),
+    insert: (text) => {
+      if (!this.open || !this.editor) return false;
+      this.editor.insert(text);
+      return true;
+    },
+    readSiteFile: async (path) => {
+      const clean = path.replace(/^\/+/, "");
+      if (!this.site || !clean || clean.split("/").some((part) => part === ".." || part === ".git")) return null;
+      return (await readText(this.site.handle, clean).catch(() => undefined)) ?? null;
+    },
+    select: (from, to) => {
+      if (!this.open || !this.editor) return false;
+      const bodyStart = this.text.length - this.open.post.body.length;
+      if (from < bodyStart) return false;
+      this.editor.select(from - bodyStart, to - bodyStart);
+      return true;
+    },
+    save: async () => {
+      if (!this.dirty) return false;
+      await this.save();
+      return !this.dirty;
+    },
+    sitePosts: () =>
+      [...this.posts, ...this.notes].map((p) => ({
+        path: p.path,
+        url: p.url,
+        title: p.title,
+        section: p.section,
+        ...(p.date ? { date: p.date.toISOString().slice(0, 10) } : {}),
+        draft: p.draft,
+        tags: terms(p.frontMatter.tags),
+        categories: terms(p.frontMatter.categories),
+      })),
+    prompt: (text, label) => {
+      const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
+      if (!this.connection || !provider || !rest.length) throw new Error("The assistant isn't ready: open a post and pick a model.");
+      this.connection.prompt(text, { provider, modelId: rest.join("/") }, label);
+      if (!this.showPreview) this.togglePreview();
+      this.setSideTab("assistant");
+    },
+    notify: (message, level) => (level === "error" ? (this.error = message) : this.flash(message)),
+    server: () => (this.agentServerUp ? this.agentSettings : undefined),
+  });
 
   get dirty(): boolean {
     return !!this.open && this.text !== this.open.savedText;
@@ -250,6 +332,8 @@ export class MdApp extends LitElement {
     window.addEventListener("keydown", this.onKeydown);
     NARROW.addEventListener("change", this.onNarrowChange);
     this.unregisterTools = registerEditorTools(this.toolHost);
+    this.extensions.addEventListener("change", this.onExtensionsChange);
+    void this.extensions.load();
     watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
     void loadInstalledSkills().then((skills) => (this.installedSkills = skills));
@@ -267,8 +351,20 @@ export class MdApp extends LitElement {
     NARROW.removeEventListener("change", this.onNarrowChange);
     this.unregisterTools?.();
     this.stopWatching?.();
+    this.extensions.removeEventListener("change", this.onExtensionsChange);
+    this.extensions.dispose();
   }
 
+  private onExtensionsChange = () => {
+    this.extensionsVersion++;
+    // Extension skills go with the other skills; send them again only when they change.
+    const skills = JSON.stringify(this.extensions.host.skills);
+    if (skills === this.sentSkills) return;
+    this.sentSkills = skills;
+    this.connection?.updateSkills(this.extraSkills());
+    this.siteConnection?.updateSkills(this.extraSkills());
+  };
+  private sentSkills = "[]";
   private onNarrowChange = () => (this.narrow = NARROW.matches);
 
   private onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -397,6 +493,7 @@ export class MdApp extends LitElement {
   private async selectSite(site: SiteRecord, gesture = true) {
     if (!(await this.confirmDiscard())) return;
     this.site = site;
+    if (this.open) this.extensions.postClosed();
     this.open = undefined;
     this.postGeneration++;
     this.stopWatching?.();
@@ -441,6 +538,7 @@ export class MdApp extends LitElement {
       this.siteInstructions = rules.filter(Boolean).join("\n\n");
       this.siteSkills = skills;
       void this.watch(site);
+      void this.extensions.load({ id: site.id, handle: site.handle });
       void this.connectAgentServer();
     } catch (e) {
       if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
@@ -566,6 +664,7 @@ export class MdApp extends LitElement {
       this.loadCount++;
       this.text = text;
       if (switching || !this.connection) this.openConnection();
+      this.extensions.postOpened();
       if (switching) this.mobileView = "write";
       this.changedOnDisk = false;
       this.error = "";
@@ -636,6 +735,7 @@ export class MdApp extends LitElement {
       open.summary = updated;
       this.open = { ...open };
       this.changedOnDisk = false;
+      this.extensions.postSaved();
       this.flash(`Saved ${path}`);
     } catch (e) {
       this.error = `Save failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -719,6 +819,11 @@ export class MdApp extends LitElement {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void this.save();
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      void this.openPalette();
+    } else if (!e.defaultPrevented) {
+      this.extensions.host.handleKey(e);
     }
   };
 
@@ -746,6 +851,7 @@ export class MdApp extends LitElement {
       if (first) this.setModel(`${first.provider}/${first.modelId}`);
     }
     if (failed) return;
+    void this.extensions.sync();
     this.indexStatus = "Indexing posts for search…";
     await this.syncIndex();
   }
@@ -790,13 +896,14 @@ export class MdApp extends LitElement {
     if (!this.open || !this.site) return;
     const id = sessionId(this.site.id, this.open.summary.path);
     this.connection = isOnDevice(this.agentSettings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.agentSettings, id);
+    this.extensions.watch(this.connection);
     this.connection.updatePost(this.postContext()!);
     this.connection.updateSkills(this.extraSkills());
   }
 
-  /** Skills beyond the built-in ones; a site's own skill replaces an installed one with the same name. */
+  /** Skills beyond the built-in ones: extensions', then installed, then the site's own, each replacing an earlier one with the same name. */
   private extraSkills(): Skill[] {
-    return mergeSkills(this.installedSkills, this.siteSkills);
+    return mergeSkills(this.extensions.host.skills, this.installedSkills, this.siteSkills);
   }
 
   private skillManager(): SkillManager {
@@ -859,6 +966,7 @@ export class MdApp extends LitElement {
   }
 
   private closeSiteConnection() {
+    this.extensions.detach(this.siteConnection);
     this.siteConnection?.close();
     this.siteConnection = undefined;
   }
@@ -867,7 +975,10 @@ export class MdApp extends LitElement {
   private ensureSiteConnection(): AgentConnection | undefined {
     const context = this.siteContext();
     if (!context) return undefined;
-    if (!this.siteConnection) this.siteConnection = AgentConnection.forSite(this.agentSettings, context.siteId);
+    if (!this.siteConnection) {
+      this.siteConnection = AgentConnection.forSite(this.agentSettings, context.siteId);
+      this.extensions.attach(this.siteConnection);
+    }
     return this.siteConnection;
   }
 
@@ -906,6 +1017,32 @@ export class MdApp extends LitElement {
       text: this.text,
       shortcodes: this.shortcodes,
     };
+  }
+
+  /** The open post as extensions see it. Offsets are into the whole file. */
+  private extensionSnapshot(): PostSnapshot | undefined {
+    if (!this.open || !this.site) return undefined;
+    const bodyStart = this.text.length - this.open.post.body.length;
+    const selection = this.editor?.selection ?? { from: 0, to: 0 };
+    return {
+      path: this.open.summary.path,
+      url: this.open.summary.url,
+      title: this.open.summary.title,
+      siteName: this.site.name,
+      text: this.text,
+      bodyStart,
+      selection: { from: selection.from + bodyStart, to: selection.to + bodyStart },
+      unsaved: this.dirty,
+    };
+  }
+
+  /** Extension annotations within the body, as body offsets for the editor. */
+  private get bodyAnnotations(): BodyAnnotation[] {
+    if (!this.open) return [];
+    const bodyStart = this.text.length - this.open.post.body.length;
+    return this.extensions.host.annotations
+      .filter((a) => a.from >= bodyStart)
+      .map((a) => ({ ...a, from: a.from - bodyStart, to: a.to - bodyStart }));
   }
 
   private onApplyEdit(e: CustomEvent<{ edit: Edit; done: (ok: boolean) => void }>) {
@@ -996,6 +1133,20 @@ export class MdApp extends LitElement {
     }
   }
 
+  /** Extension edits stay in the body, where the editor can undo them; front matter changes go through the assistant. */
+  private extensionEdits(edits: Edit[]) {
+    const problems: string[] = [];
+    let applied = 0;
+    edits.forEach((edit, i) => {
+      const bodyStart = this.open ? this.text.length - this.open.post.body.length : 0;
+      if (this.open && this.text.indexOf(edit.find) !== -1 && this.text.indexOf(edit.find) < bodyStart) {
+        problems.push(`Edit ${i + 1}: extensions can only edit the post body, not the front matter.`);
+      } else if (this.applyEdit(edit)) applied++;
+      else problems.push(`Edit ${i + 1}: find text not found exactly once.`);
+    });
+    return { applied, problems };
+  }
+
   // ---- Tools for browser agents (WebMCP) ----------------------------------------
 
   private readonly toolHost: EditorToolHost = {
@@ -1045,14 +1196,15 @@ export class MdApp extends LitElement {
     },
   };
 
-  private setSideTab(tab: "preview" | "assistant") {
+  private setSideTab(tab: string) {
     this.sideTab = tab;
-    if (this.narrow) this.mobileView = tab;
+    if (this.narrow && (tab === "preview" || tab === "assistant")) this.mobileView = tab;
     localStorage.setItem(TAB_KEY, tab);
   }
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
+    if (changed.has("text") && this.open && changed.get("text") !== undefined) this.extensions.postChanged();
     if ((changed.has("siteSkills") || changed.has("installedSkills")) && this.connection) this.connection.updateSkills(this.extraSkills());
     // Opened lazily, the first time the site assistant is on screen.
     const assistantShown = this.narrow ? this.mobileView === "assistant" : this.showPreview && this.effectiveTab === "assistant";
@@ -1228,8 +1380,9 @@ export class MdApp extends LitElement {
               ${this.shortcodes.map((s) => html`<option value=${s}>${s}</option>`)}
             </select>`
           : nothing}
+        ${this.renderExtensionTools()}
       </div>
-      <md-editor .value=${post.body} .checkSpelling=${this.checkSpelling} @change=${this.onBodyChange} @image-files=${this.onImageFiles}></md-editor>
+      <md-editor .value=${post.body} .checkSpelling=${this.checkSpelling} .annotations=${this.bodyAnnotations} @change=${this.onBodyChange} @image-files=${this.onImageFiles} @selection-change=${() => this.extensions.selectionChanged()}></md-editor>
     </main>`;
   }
 
@@ -1292,10 +1445,15 @@ export class MdApp extends LitElement {
                   </button>`,
                 )}
               </div>
+              <h4>Extensions</h4>
+              <p class="muted">
+                ${this.extensions.entries.filter((e) => e.enabled).length} of ${this.extensions.entries.length} on.
+                <button type="button" class="small" @click=${() => this.showExtensions()}>${icon("puzzle")} Manage extensions…</button>
+              </p>
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
-              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.toolsSettings?.show()}>Tools and MCP servers…</button></div>
+              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.showToolsSettings()}>Tools and MCP servers…</button></div>
               <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
@@ -1306,13 +1464,54 @@ export class MdApp extends LitElement {
             </form>`
           : nothing}
       </dialog>
+      <extensions-dialog .controller=${this.extensions}></extensions-dialog>
+      <command-palette .commands=${this.paletteCommands()}></command-palette>
       <tools-settings .agentSettings=${this.agentSettings} ?webSearch=${this.serverWebSearch}></tools-settings>
     `;
   }
 
+  /** Extension toolbar buttons, and a menu of their commands. */
+  private renderExtensionTools() {
+    const { buttons, commands } = this.extensions.host;
+    return html`${buttons.map(
+      (b) => html`<button class="small ghost" title=${b.spec.title ?? `${b.spec.label} (${b.name})`} @click=${() => this.extensions.host.clickButton(b.extension, b.spec.id)}>${b.spec.label}</button>`,
+    )}
+    ${commands.length
+      ? html`<button class="small ghost" title=${`Commands (${keyLabel("Mod-Shift-p")})`} @click=${() => this.openPalette()}>Commands…</button>`
+      : nothing}`;
+  }
+
+  /** Everything the command palette lists: editor actions, extension commands, and the assistant's quick edits. */
+  private paletteCommands(): PaletteCommand[] {
+    const out: PaletteCommand[] = [];
+    if (this.open) out.push({ id: "save", title: "Save", key: "Mod-s", run: () => void this.save() });
+    out.push({ id: "preview", title: this.showPreview ? "Hide side panel" : "Show side panel", run: () => this.togglePreview() });
+    if (this.site) out.push({ id: "extensions", title: "Manage extensions…", run: () => this.showExtensions() });
+    for (const c of this.extensions.host.commands) {
+      out.push({ id: `${c.extension}:${c.spec.id}`, title: c.spec.title, detail: c.name, key: c.spec.key, run: () => void this.extensions.host.runCommand(c.extension, c.spec.id) });
+    }
+    if (this.open) {
+      const edits = [...postActions(), ...this.extensions.host.quickEdits.map((e) => ({ name: e.spec.name, prompt: e.spec.prompt }))];
+      for (const a of edits) out.push({ id: `edit:${a.name}`, title: `Assistant: ${a.name}`, run: () => this.runPrompt(a.prompt, a.name) });
+    }
+    return out;
+  }
+
+  /** Starts a post assistant run, as a quick edit button does. */
+  private runPrompt(text: string, label: string) {
+    const [provider, ...rest] = (this.agentSettings.model ?? "").split("/");
+    if (!this.connection || !provider || !rest.length) {
+      this.error = "The assistant isn't ready: open a post and pick a model.";
+      return;
+    }
+    this.connection.prompt(text, { provider, modelId: rest.join("/") }, label);
+    if (!this.showPreview) this.togglePreview();
+    this.setSideTab("assistant");
+  }
+
   /** With no post open (or a note, which has no URL) there is nothing to preview, so the side panel shows the assistant. */
-  private get effectiveTab(): "preview" | "assistant" {
-    return this.open?.summary.url ? this.sideTab : "assistant";
+  private get effectiveTab(): string {
+    return this.sideTab.startsWith("ext:") || this.open?.summary.url ? this.sideTab : "assistant";
   }
 
   private renderSide(tab = this.effectiveTab) {
@@ -1321,8 +1520,14 @@ export class MdApp extends LitElement {
       ${this.narrow ? nothing : html`<div class="tabs"><div class="seg" role="tablist">
         <button role="tab" aria-selected=${tab === "preview"} ?disabled=${!this.open?.summary.url} @click=${() => this.setSideTab("preview")}>Preview</button>
         <button role="tab" aria-selected=${tab === "assistant"} @click=${() => this.setSideTab("assistant")}>Assistant</button>
+        ${this.extensions.host.panels.map((p) => {
+          const id = `ext:${p.extension}:${p.spec.id}`;
+          return html`<button role="tab" title=${p.name} aria-selected=${tab === id} @click=${() => this.setSideTab(id)}>${p.spec.title}</button>`;
+        })}
       </div></div>`}
-      ${tab === "preview"
+      ${tab.startsWith("ext:")
+        ? this.renderExtensionPanel(tab)
+        : tab === "preview"
         ? html`<preview-pane
             .origin=${this.site!.previewOrigin}
             .path=${this.open!.summary.url}
@@ -1341,20 +1546,53 @@ export class MdApp extends LitElement {
             .skillManager=${this.skillManager()}
             @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
             @apply-edit=${this.onApplyEdit}
+            .extensionActions=${this.extensions.host.quickEdits.map(
+              (e): EditAction => ({ id: `${e.extension}:${e.spec.id}`, name: e.spec.name, prompt: e.spec.prompt }),
+            )}
             @apply-file-change=${this.onApplyFileChange}
             @open-path=${this.onOpenPath}
           ></agent-panel>`}
     </section>`;
   }
 
+  /** An extension's panel: its page in a sandboxed iframe (scripts, but no same-origin access). */
+  private renderExtensionPanel(tab: string) {
+    const panel = this.extensions.host.panels.find((p) => `ext:${p.extension}:${p.spec.id}` === tab);
+    if (!panel) return html`<div class="empty"><p>This panel's extension isn't running.</p></div>`;
+    // A new frame for each render. The frame loads public/extension-panel.html,
+    // which has its own CSP, then swaps in the panel's HTML when it's posted.
+    return keyed(
+      `${tab}\u0000${panel.spec.html}`,
+      html`<iframe
+        class="ext-panel"
+        title=${`${panel.spec.title} (${panel.name})`}
+        sandbox="allow-scripts allow-forms allow-popups"
+        src=${PANEL_PAGE}
+        @load=${(e: Event) => this.loadPanel(e.target as HTMLIFrameElement, panel.extension, panel.spec.id, panel.spec.html)}
+      ></iframe>`,
+    );
+  }
+
+  private loadedPanels = new WeakSet<HTMLIFrameElement>();
+
+  private loadPanel(frame: HTMLIFrameElement, extension: string, id: string, markup: string) {
+    // The frame fires load again once the panel's own page is written; that one isn't ours.
+    if (this.loadedPanels.has(frame) || !frame.contentWindow) return;
+    this.loadedPanels.add(frame);
+    this.extensions.host.attachPanel(extension, id, frame.contentWindow);
+    frame.contentWindow.postMessage({ type: "extension-panel:html", html: markup }, "*");
+  }
+
   private renderStatus() {
-    const words = this.open ? (this.open.post.body.match(/[\p{L}\p{N}’']+/gu) ?? []).length : 0;
+    // Word count, reading time and the like come from extensions (see extensions/builtin).
+    const statuses = this.extensions.host.statuses.filter((s) => s.spec.text);
     return html`<div class="status" role="status">
       ${this.open ? html`<span class=${this.dirty ? "dirty" : ""}><span class="dot"></span>${this.dirty ? "Unsaved changes" : "Saved"}</span>` : nothing}
       ${this.error ? html`<span class="error">${this.error}</span>` : nothing}
       ${this.message ? html`<span>${this.message}</span>` : nothing}
       ${this.indexStatus ? html`<span>${this.indexStatus}</span>` : nothing}
-      ${this.open ? html`<span class="end">${words.toLocaleString()} words · ${Math.max(1, Math.round(words / 230))} min read</span>` : nothing}
+
+      ${statuses.map((s, i) => html`<span class=${i === 0 ? "end" : ""} title=${s.spec.title ?? s.name}>${s.spec.text}</span>`)}
     </div>`;
   }
 
@@ -1433,4 +1671,10 @@ function focusedFrontMatterField(): HTMLInputElement | HTMLTextAreaElement | und
 /** Edits that run on the open post (WebMCP tools only drive the post assistant). */
 function postActions() {
   return [...BUILTIN_ACTIONS, ...loadCustomActions().filter((a) => (a.scope ?? "post") === "post")];
+}
+
+/** A front matter taxonomy value as a list of strings. */
+function terms(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string" && value ? [value] : [];
 }

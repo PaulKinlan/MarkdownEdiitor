@@ -2,6 +2,7 @@ import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
 import type { SiteSession } from "./agent/site-session";
 import type { ToolStore } from "./tools/store";
+import type { ExtensionStore } from "./extension-store";
 import type { Observability } from "./observability/store";
 
 export interface Env {
@@ -11,6 +12,8 @@ export interface Env {
   SITE_SESSION: DurableObjectNamespace<SiteSession>;
   /** The author's MCP servers and HTTP API tools, shared by every agent. */
   TOOL_STORE: DurableObjectNamespace<ToolStore>;
+  /** Installed editor extensions (see worker/extension-store.ts). */
+  EXTENSION_STORE: DurableObjectNamespace<ExtensionStore>;
   OBSERVABILITY: DurableObjectNamespace<Observability>;
   /** The deployed commit, set by the deploy workflow (--var COMMIT:<sha>). Reported by /api/health. */
   COMMIT?: string;

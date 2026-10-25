@@ -33,7 +33,12 @@ for (const h of ["Permissions-Policy", "Content-Security-Policy:", "Content-Secu
   check(headers.includes(h), `_headers no longer sets ${h}`);
 }
 check(headers.includes("__SCRIPT_HASHES__"), "_headers lost the __SCRIPT_HASHES__ placeholder the build fills in");
-check(!/unsafe-(inline|eval)/.test(headers), "_headers must not allow unsafe-inline or unsafe-eval");
+// Extension panels are the one exception: a panel is the extension's own page, in a
+// sandboxed iframe on a path of its own (docs/adr/0003-editor-extensions.md).
+const panelRule = /^\/extension-panel\n(?:[ \t]+.*\n?)*/m;
+check(panelRule.test(headers), "_headers lost the /extension-panel rule");
+check(!/unsafe-eval/.test(headers), "_headers must not allow unsafe-eval");
+check(!/unsafe-inline/.test(headers.replace(panelRule, "")), "_headers must not allow unsafe-inline outside /extension-panel");
 
 if (problems.length) {
   for (const p of problems) console.error(`FAIL ${p}`);

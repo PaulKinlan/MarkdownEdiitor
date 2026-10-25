@@ -8,7 +8,12 @@ import type { MutableModels } from "@earendil-works/pi-ai/models";
  * tool calls, streaming, edit proposals, and the editor's review UI. In the
  * site assistant it lists the posts, reads the newest, and proposes the same
  * edit as a file change (or a new note when there is nothing to tighten).
+ * A prompt like `/tool list_claims {}` calls that tool instead (for trying
+ * extension tools), and the answer quotes the start of its result.
  */
+/** Tools the script itself calls; results of any other tool came from a `/tool` prompt. */
+const SCRIPTED = new Set(["read_post", "list_posts", "propose_edits", "propose_changes"]);
+
 export function addDemoModel(models: MutableModels) {
   const faux = fauxProvider({ tokensPerSecond: 120 });
   const respond: FauxResponseFactory = (context) => {
@@ -17,6 +22,21 @@ export function addDemoModel(models: MutableModels) {
     const result = typeof last?.content === "string" ? last.content : (last?.content ?? []).map((b) => b.text ?? "").join("");
     // Tool declarations travel in the system messages; the site agent is the one with propose_changes.
     const site = context.messages.some((m) => (m.role as string) === "system" && JSON.stringify(m).includes("propose_changes"));
+    if (last?.role === "user") {
+      const tool = result.trim().match(/^\/tool ([\w-]+)\s*(\{[\s\S]*\})?$/);
+      if (tool) {
+        let args = {};
+        try {
+          args = tool[2] ? JSON.parse(tool[2]) : {};
+        } catch {
+          return fauxAssistantMessage([fauxText("The arguments after the tool name must be JSON.")]);
+        }
+        return fauxAssistantMessage([fauxToolCall(tool[1], args)], { stopReason: "toolUse" });
+      }
+    }
+    if (last?.role === "toolResult" && !SCRIPTED.has(last.toolName ?? "")) {
+      return fauxAssistantMessage([fauxText(`${last.toolName} said:\n\n${result.slice(0, 400)}`)]);
+    }
     if (site && last?.role === "toolResult" && last.toolName === "list_posts") {
       const path = result.match(/\[([^\]\n]+\.md)\]/)?.[1];
       if (!path) return fauxAssistantMessage([fauxText("This site has no posts in the index yet.")]);

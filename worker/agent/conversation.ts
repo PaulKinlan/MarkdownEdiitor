@@ -4,6 +4,8 @@ import { createRegistry, Harness, type Conversation, type Extension, type Regist
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ClientToServer, ModelRef, PostContext, ServerToClient, SiteContext } from "../../src/shared/protocol";
+import type { ExtensionCall, ExtensionCallResults } from "../../src/shared/extensions";
+import { ExtensionBridge } from "./extension-bridge";
 import { mergeSkills, type Skill } from "../../src/shared/skills";
 import type { ToolSettings } from "../../src/shared/tools";
 import type { Env } from "../env";
@@ -39,6 +41,9 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
   private registry!: Registry;
   private toolSettings?: ToolSettings;
   private toolExtensions: Extension[] = [];
+  private bridge!: ExtensionBridge;
+  /** Calls waiting on an editor extension, by call id. */
+  private calls = new Map<string, { ws: WebSocket; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(ctx: DurableObjectState, env: Env, private readonly kind: K, extensions: (self: ConversationObject<K>) => Extension[]) {
     super(ctx, env);
@@ -56,8 +61,16 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       if (skills) this.skills = JSON.parse(skills.value);
 
       const registry = (this.registry = createRegistry());
-      for (const extension of extensions(this)) registry.install(extension);
+      const builtin = extensions(this);
+      for (const extension of builtin) registry.install(extension);
       await this.refreshTools();
+      // Editor extensions, installed again from their last manifest so pending calls to their tools can resume.
+      this.bridge = new ExtensionBridge(registry, { call: (call, timeoutMs) => this.callEditor(call, timeoutMs) }, {
+        scope: kind,
+        reserved: new Set(builtin.flatMap((e) => (e.tools ?? []).map((t) => t.name))),
+      });
+      const saved = await this.database.get<{ value: string }>("SELECT value FROM editor_state WHERE key = 'extensions'");
+      if (saved) this.bridge.sync(JSON.parse(saved.value));
       const storage = await SqliteStorage.open(this.database, { prefix: "pi_" });
       this.harness = await Harness.open(
         storage,
@@ -123,6 +136,26 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
         case "abort":
           await this.root.abort(context);
           break;
+        case "extensions": {
+          // The newest editor to describe its extensions is the one that runs them.
+          ws.serializeAttachment({ extensionsAt: Date.now() });
+          const problems = this.bridge.sync(message.extensions);
+          await this.database.run(
+            "INSERT INTO editor_state (key, value) VALUES ('extensions', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            JSON.stringify(message.extensions),
+          );
+          if (problems.length) this.send(ws, { type: "error", message: problems.join("\n") });
+          break;
+        }
+        case "extension_result": {
+          const pending = this.calls.get(message.callId);
+          if (!pending) break;
+          this.calls.delete(message.callId);
+          clearTimeout(pending.timer);
+          if (message.ok) pending.resolve(message.value);
+          else pending.reject(new Error(message.error || "The extension failed."));
+          break;
+        }
         case "reset":
           await this.arm({ ...this.harness.wake(), active: true });
           await this.root.reset(undefined, context);
@@ -131,6 +164,34 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
     } catch (e) {
       this.send(ws, { type: "error", message: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  webSocketClose(ws: WebSocket) {
+    for (const [id, pending] of this.calls) {
+      if (pending.ws !== ws) continue;
+      this.calls.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(new Error("The editor closed before the extension answered."));
+    }
+  }
+
+  /** Asks the editor that last sent its extensions to run a tool or hook. */
+  private callEditor<C extends ExtensionCall>(call: C, timeoutMs: number): Promise<ExtensionCallResults[C["kind"]]> {
+    const ws = this.ctx
+      .getWebSockets()
+      .map((socket) => ({ socket, at: (socket.deserializeAttachment() as { extensionsAt?: number } | null)?.extensionsAt ?? 0 }))
+      .filter((s) => s.at > 0)
+      .sort((a, b) => b.at - a.at)[0]?.socket;
+    if (!ws) return Promise.reject(new Error("The editor isn't open, so its extensions can't run. Ask the author to open it."));
+    const callId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.calls.delete(callId);
+        reject(new Error(`The extension didn't answer within ${Math.round(timeoutMs / 1000)} s.`));
+      }, timeoutMs);
+      this.calls.set(callId, { ws, resolve: resolve as (value: unknown) => void, reject, timer });
+      this.send(ws, { type: "extension_call", callId, call });
+    });
   }
 
   async alarm() {

@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<!-- The page for extension panels. It is served with its own CSP (public/_headers),
+     so a panel's inline scripts and styles run without loosening the editor's.
+     The editor posts the panel's HTML once it loads; this replaces the page with it. -->
+<script>
+  addEventListener("message", function once(e) {
+    if (e.source !== parent || !e.data || e.data.type !== "extension-panel:html") return;
+    removeEventListener("message", once);
+    document.open();
+    document.write(String(e.data.html));
+    document.close();
+  });
+</script>
