@@ -1,10 +1,12 @@
 import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
+import type { SiteSession } from "./agent/site-session";
 
 export interface Env {
   ASSETS: Fetcher;
   AGENT_SESSION: DurableObjectNamespace<AgentSession>;
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
+  SITE_SESSION: DurableObjectNamespace<SiteSession>;
   /** When set, every /api request must carry it (Authorization: Bearer, or ?token= for WebSockets). */
   EDITOR_TOKEN?: string;
   /** Comma-separated editor origins allowed to call the API cross-origin (e.g. http://localhost:5173). */
