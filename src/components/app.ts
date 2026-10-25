@@ -1001,7 +1001,7 @@ export class MdApp extends LitElement {
                 ></textarea>
               </label>
               <p class="muted">
-                <label style="display:inline"><input type="checkbox" .checked=${this.checkSpelling} @change=${(e: Event) => this.setCheckSpelling((e.target as HTMLInputElement).checked)} /> Check spelling in the editor</label>.
+                <label class="inline"><input type="checkbox" .checked=${this.checkSpelling} @change=${(e: Event) => this.setCheckSpelling((e.target as HTMLInputElement).checked)} /> Check spelling in the editor</label>.
                 ${canUseDictionary()
                   ? "These words, and the site's tags and categories, aren't marked as misspelled."
                   : "Chrome 159 and later stop marking these words, and the site's tags and categories, as misspelled."}

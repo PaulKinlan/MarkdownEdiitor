@@ -1,0 +1,21 @@
+# Hugo Editor
+
+> A local-first markdown editor for Hugo blogs, with writing agents. It runs in the browser against folders on the user's own machine; the Cloudflare Worker serves the app and the agent API.
+
+This is a single-user tool. There is no public content to read or index here.
+
+## Routes
+
+- `/`: the editor (a single-page app; every other path serves it too).
+- `/api/health`: unauthenticated status, including the deployed commit.
+- `/api/reports`: the browser report collector (CSP, Reporting API, Web Vitals). Write-only.
+- `/api/*` (everything else): the agent API. Needs the editor token (`Authorization: Bearer <token>`).
+
+## Agents and tools
+
+The editor exposes its own tools to in-browser agents through WebMCP (`navigator.modelContext`) where the browser supports it. There is no public API for outside agents.
+
+## Source
+
+- [Repository](https://github.com/PaulKinlan/MarkdownEdiitor)
+- [Architecture decisions](https://github.com/PaulKinlan/MarkdownEdiitor/tree/main/docs/adr)

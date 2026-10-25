@@ -1,0 +1,6 @@
+# Security contact for the Hugo Editor (RFC 9116).
+Contact: https://github.com/PaulKinlan/MarkdownEdiitor/security/advisories/new
+Expires: 2027-10-25T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://markdown-editor.kinlan-test.workers.dev/.well-known/security.txt
+Policy: https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/THREAT_MODEL.md

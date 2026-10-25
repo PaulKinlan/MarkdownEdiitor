@@ -63,6 +63,17 @@ The editor is a PWA: install it from Chrome or Edge's address bar and it runs in
 
 The service worker never handles `/api/*` (agent calls and WebSockets) or any other origin, such as the local `hugo server` preview. In Chrome, static routes (Service Worker Static Routing API) send those straight to the network without starting the worker. It is only registered in production builds, so `npm run dev` is unaffected; use `npm run preview` to try it locally.
 
+## Security and telemetry
+
+Every page carries a `Permissions-Policy` that denies the capabilities the editor doesn't use, and a hash-based Content Security Policy with Trusted Types, currently in report-only mode. CSP reports, browser reports (deprecations, interventions, crashes), uncaught errors and Core Web Vitals go to `POST /api/reports` and are kept, de-duplicated and redacted, in an `Observability` Durable Object. Read them with the editor token:
+
+```sh
+curl -H "Authorization: Bearer $EDITOR_TOKEN" https://<worker>/api/observability/summary
+curl -H "Authorization: Bearer $EDITOR_TOKEN" "https://<worker>/api/observability/errors?since=0"
+```
+
+`/api/health` reports the deployed commit, which open editors use to notice a new deploy. Setting `KILL_SW=1` on the Worker makes installed copies remove their service worker and caches. See `THREAT_MODEL.md` and `docs/adr/`.
+
 ## Running it
 
 ```sh
@@ -71,6 +82,7 @@ npm run dev        # Vite dev server at http://localhost:5173 (proxies /api to :
 npm run dev:worker # the Worker and Durable Objects at http://localhost:8787
 npm test           # unit tests (front matter, permalinks, templates)
 npm run typecheck
+npm run gate       # typecheck, tests, build, discovery files and the performance budget
 npm run deploy     # build and deploy to Cloudflare Workers
 ```
 

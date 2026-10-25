@@ -1,10 +1,16 @@
 import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
+import type { Observability } from "./observability/store";
 
 export interface Env {
   ASSETS: Fetcher;
   AGENT_SESSION: DurableObjectNamespace<AgentSession>;
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
+  OBSERVABILITY: DurableObjectNamespace<Observability>;
+  /** The deployed commit, set by the deploy workflow (--var COMMIT:<sha>). Reported by /api/health. */
+  COMMIT?: string;
+  /** "1" makes installed copies unregister their service worker and clear caches (emergency switch). */
+  KILL_SW?: string;
   /** When set, every /api request must carry it (Authorization: Bearer, or ?token= for WebSockets). */
   EDITOR_TOKEN?: string;
   /** Comma-separated editor origins allowed to call the API cross-origin (e.g. http://localhost:5173). */
