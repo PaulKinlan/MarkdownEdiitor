@@ -875,7 +875,7 @@ export class MdApp extends LitElement {
           </select>
           <button class="ghost icon-only" aria-label="Site settings" title="Site settings" ?disabled=${!this.site} @click=${() => this.settingsDialog?.showModal()}>${icon("settings")}</button>`
         : nothing}
-      ${this.supportsPicker && this.sites.length && !this.narrow
+      ${this.supportsPicker && this.sites.length
         ? html`<button class="ghost icon-only" aria-label="Add site folder" title="Add site folder…" @click=${() => this.addSite()}>${icon("folder")}</button>`
         : nothing}
       <span class="spacer"></span>
