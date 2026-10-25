@@ -857,7 +857,9 @@ export class MdApp extends LitElement {
    */
   private onApplyFileChange(e: CustomEvent<{ path: string; edit?: Edit; create?: string; done: (ok: boolean) => void }>) {
     const { path, edit, create, done } = e.detail;
-    const run = this.fileWrites.then(() => this.applyFileChange(path, edit, create));
+    // Pinned to the site it was proposed for: a queued write must not land in a site switched to meanwhile.
+    const site = this.site;
+    const run = this.fileWrites.then(() => this.applyFileChange(site, path, edit, create));
     this.fileWrites = run.catch(() => undefined);
     run.then(done, (err) => {
       this.error = `Couldn't change ${path}: ${err instanceof Error ? err.message : String(err)}`;
@@ -865,9 +867,9 @@ export class MdApp extends LitElement {
     });
   }
 
-  private async applyFileChange(path: string, edit: Edit | undefined, create: string | undefined): Promise<boolean> {
-    const { site, config } = this;
-    if (!site || !config) return false;
+  private async applyFileChange(site: SiteRecord | undefined, path: string, edit: Edit | undefined, create: string | undefined): Promise<boolean> {
+    const { config } = this;
+    if (!site || site !== this.site || !config) return false;
     if (create === undefined && path === this.open?.summary.path) return edit ? this.applyEdit(edit) : false;
     let next: string;
     if (create !== undefined) {
@@ -880,6 +882,7 @@ export class MdApp extends LitElement {
       if (at === -1 || current.indexOf(edit.find, at + 1) !== -1) return false;
       next = current.slice(0, at) + edit.replace + current.slice(at + edit.find.length);
     }
+    if (site !== this.site) return false;
     this.writing++;
     try {
       await writeFile(site.handle, path, next);
@@ -903,9 +906,9 @@ export class MdApp extends LitElement {
   }
 
   private async onOpenPath(e: CustomEvent<string>) {
-    const summary = this.posts.find((p) => p.path === e.detail);
+    const summary = [...this.posts, ...this.notes].find((p) => p.path === e.detail);
     if (summary) await this.openPost(summary);
-    else this.error = `${e.detail} isn't in the post list.`;
+    else this.error = `${e.detail} isn't in the post or note list.`;
   }
 
   /** Applies a find/replace edit. Body edits go through the editor so they can be undone. */

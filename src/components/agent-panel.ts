@@ -318,8 +318,8 @@ export class AgentPanel extends LitElement {
         <label>Name <input name="name" required .value=${this.editing?.name ?? ""} /></label>
         <label>Runs on
           <select name="scope">
-            <option value="post" ?selected=${(this.editing?.scope ?? this.scope) === "post"}>The open post</option>
-            <option value="site" ?selected=${(this.editing?.scope ?? this.scope) === "site"}>The whole site</option>
+            <option value="post" ?selected=${(this.editing ? (this.editing.scope ?? "post") : this.scope) === "post"}>The open post</option>
+            <option value="site" ?selected=${(this.editing ? (this.editing.scope ?? "post") : this.scope) === "site"}>The whole site</option>
           </select>
         </label>
         <label>Instruction <textarea name="prompt" required .value=${this.editing?.prompt ?? ""} placeholder="e.g. Rewrite every heading as a question the section answers."></textarea></label>
