@@ -4,8 +4,12 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 export type FrontMatterFormat = "yaml" | "toml" | "json" | "none";
 export type FrontMatterData = Record<string, unknown>;
 
-const YAML_RE = /^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/;
-const TOML_RE = /^(\+\+\+[ \t]*\r?\n)([\s\S]*?)(\r?\n\+\+\+[ \t]*(?:\r?\n|$))/;
+// Groups: opening delimiter, front matter, the newline before the closing delimiter, closing delimiter.
+// The middle two are absent for an empty block (`---\n---`).
+const YAML_RE = /^(---[ \t]*\r?\n)(?:([\s\S]*?)(\r?\n))?(---[ \t]*(?:\r?\n|$))/;
+const TOML_RE = /^(\+\+\+[ \t]*\r?\n)(?:([\s\S]*?)(\r?\n))?(\+\+\+[ \t]*(?:\r?\n|$))/;
+// JSON front matter is an object; `{{< shortcode >}}` at the top of a body-only file is not.
+const JSON_START = /^\{\s*["}]/;
 
 /**
  * A content file split into front matter and body.
@@ -19,13 +23,15 @@ export class Post {
   body: string;
   private source: string;
   private open: string;
+  private newline: string;
   private close: string;
   private data: FrontMatterData;
 
-  private constructor(format: FrontMatterFormat, source: string, open: string, close: string, body: string) {
+  private constructor(format: FrontMatterFormat, source: string, open: string, newline: string, close: string, body: string) {
     this.format = format;
     this.source = source;
     this.open = open;
+    this.newline = newline;
     this.close = close;
     this.body = body;
     this.data = parseSource(format, source);
@@ -33,22 +39,26 @@ export class Post {
 
   static parse(text: string): Post {
     let m = text.match(YAML_RE);
-    if (m) return new Post("yaml", m[2], m[1], m[3], text.slice(m[0].length));
+    if (m) return new Post("yaml", m[2] ?? "", m[1], m[3] ?? "", m[4], text.slice(m[0].length));
     m = text.match(TOML_RE);
-    if (m) return new Post("toml", m[2], m[1], m[3], text.slice(m[0].length));
-    if (text.startsWith("{")) {
+    if (m) return new Post("toml", m[2] ?? "", m[1], m[3] ?? "", m[4], text.slice(m[0].length));
+    if (JSON_START.test(text)) {
       const end = findJsonEnd(text);
       if (end > 0) {
-        const close = text.slice(end).match(/^\r?\n/)?.[0] ?? "\n";
-        return new Post("json", text.slice(0, end), "", close, text.slice(end + close.length));
+        const separator = text.slice(end).match(/^\r?\n/)?.[0] ?? "";
+        try {
+          return new Post("json", text.slice(0, end), "", "", separator, text.slice(end + separator.length));
+        } catch {
+          // Not JSON after all: treat the file as body only.
+        }
       }
     }
-    return new Post("none", "", "", "", text);
+    return new Post("none", "", "", "", "", text);
   }
 
   static create(format: Exclude<FrontMatterFormat, "none">, data: FrontMatterData, body = ""): Post {
     const delim = format === "yaml" ? "---" : format === "toml" ? "+++" : "";
-    const post = new Post(format, format === "json" ? "{}" : "", delim ? `${delim}\n` : "", delim ? `\n${delim}\n` : "\n", body);
+    const post = new Post(format, format === "json" ? "{}" : "", delim ? `${delim}\n` : "", "", delim ? `${delim}\n` : "\n", body);
     for (const [k, v] of Object.entries(data)) post.set(k, v);
     return post;
   }
@@ -64,20 +74,18 @@ export class Post {
   /** Sets a field. `undefined` removes it. */
   set(key: string, value: unknown): void {
     if (key in this.data ? sameValue(this.data[key], value) : value === undefined) return;
-    if (this.format === "none") {
-      this.format = "yaml";
-      this.open = "---\n";
-      this.close = "\n---\n";
-    }
-    if (this.format === "yaml") {
-      this.source = setYamlField(this.source, key, value);
+    const format = this.format === "none" ? "yaml" : this.format;
+    let source: string;
+    if (format === "yaml") {
+      source = setYamlField(this.source, key, value);
     } else {
       const next = { ...this.data };
       if (value === undefined) delete next[key];
       else next[key] = value;
-      this.source = this.format === "toml" ? stringifyToml(next).replace(/\n$/, "") : JSON.stringify(next, null, 2);
+      source = format === "toml" ? stringifyToml(next).replace(/\n$/, "") : JSON.stringify(next, null, 2);
     }
-    this.data = parseSource(this.format, this.source);
+    // Parse before committing, so a change that produces invalid front matter leaves the post as it was.
+    this.commit(format, source, parseSource(format, source));
   }
 
   /** The front matter text without delimiters, for the raw editor. */
@@ -88,18 +96,23 @@ export class Post {
   /** Replaces all front matter from raw text in the current format. Throws on invalid input. */
   setRawFrontMatter(raw: string): void {
     const format = this.format === "none" ? "yaml" : this.format;
-    const data = parseSource(format, raw);
+    const source = raw.replace(/\n$/, "");
+    this.commit(format, source, parseSource(format, source));
+  }
+
+  private commit(format: Exclude<FrontMatterFormat, "none">, source: string, data: FrontMatterData) {
     if (this.format === "none") {
       this.open = "---\n";
-      this.close = "\n---\n";
+      this.close = "---\n";
     }
+    if (format !== "json") this.newline = source ? this.newline || "\n" : "";
     this.format = format;
-    this.source = raw.replace(/\n$/, "");
+    this.source = source;
     this.data = data;
   }
 
   toString(): string {
-    return this.format === "none" ? this.body : this.open + this.source + this.close + this.body;
+    return this.format === "none" ? this.body : this.open + this.source + this.newline + this.close + this.body;
   }
 }
 
@@ -109,12 +122,16 @@ function parseSource(format: FrontMatterFormat, source: string): FrontMatterData
       const doc = parseDocument(source);
       if (doc.errors.length) throw new Error(`Front matter YAML: ${doc.errors[0].message}`);
       const data = doc.toJS();
+      if (Array.isArray(data)) throw new Error("Front matter must be a map of keys, not a list");
       return data && typeof data === "object" ? (data as FrontMatterData) : {};
     }
     case "toml":
       return parseToml(source) as FrontMatterData;
-    case "json":
-      return JSON.parse(source);
+    case "json": {
+      const data = JSON.parse(source);
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("JSON front matter must be an object");
+      return data;
+    }
     default:
       return {};
   }

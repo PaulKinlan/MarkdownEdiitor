@@ -64,4 +64,40 @@ describe("Post", () => {
     post.setRawFrontMatter("title: new\ndraft: true");
     expect(post.get("draft")).toBe(true);
   });
+
+  it("handles empty front matter blocks", () => {
+    for (const src of ["---\n---\nBody\n", "+++\n+++\nBody\n", "---\n\n---\nBody\n"]) {
+      const post = Post.parse(src);
+      expect(post.format).not.toBe("none");
+      expect(post.toString()).toBe(src);
+      expect(post.body).toBe("Body\n");
+    }
+    const post = Post.parse("---\n---\nBody\n");
+    post.set("title", "t");
+    expect(post.toString()).toBe("---\ntitle: t\n---\nBody\n");
+  });
+
+  it("keeps JSON front matter separators exactly", () => {
+    expect(Post.parse('{"title": "a"}Body').body).toBe("Body");
+    expect(Post.parse('{"title": "a"}').toString()).toBe('{"title": "a"}');
+    expect(Post.parse('{"title": "a"}\nBody').toString()).toBe('{"title": "a"}\nBody');
+  });
+
+  it("treats a body that starts with a shortcode as body only", () => {
+    const text = '{{< figure src="/a.png" >}}\n\nText';
+    const post = Post.parse(text);
+    expect(post.format).toBe("none");
+    expect(post.toString()).toBe(text);
+  });
+
+  it("rejects front matter that is not an object, leaving the post unchanged", () => {
+    const post = Post.parse('{"title": "a"}\nBody');
+    expect(() => post.setRawFrontMatter("null")).toThrow();
+    expect(() => post.setRawFrontMatter("[1]")).toThrow();
+    expect(post.get("title")).toBe("a");
+    const yaml = Post.parse("---\nauthors: &people [alice]\nreviewers: *people\n---\n");
+    expect(() => yaml.set("authors", ["bob"])).toThrow();
+    expect(yaml.get("authors")).toEqual(["alice"]);
+    expect(yaml.toString()).toBe("---\nauthors: &people [alice]\nreviewers: *people\n---\n");
+  });
 });

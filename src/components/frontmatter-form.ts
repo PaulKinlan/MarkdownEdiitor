@@ -105,7 +105,7 @@ export class FrontMatterForm extends LitElement {
             this.set(key, isNumber && v.trim() !== "" && !isNaN(Number(v)) ? Number(v) : v);
           }}
         />
-        ${lower.includes("title") ? html`<span class="char-count" title="Characters">${String(value ?? "").length}</span>` : nothing}
+        ${lower.includes("title") ? html`<span class="char-count" title="Characters" .textContent=${String(String(value ?? "").length)}></span>` : nothing}
       </div>`;
     } else {
       control = html`<span class="readonly">${JSON.stringify(value)} <span class="muted">(edit in raw)</span></span>`;

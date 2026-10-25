@@ -1,4 +1,5 @@
 import { LitElement, css, html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
 import { readHugoConfig, listShortcodes, type HugoConfig } from "../lib/hugo";
@@ -98,6 +99,12 @@ export class MdApp extends LitElement {
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
+  // Bumped on each site or post load, so a slow load that finishes after the user moved on is dropped.
+  private siteGeneration = 0;
+  private postGeneration = 0;
+  /** Bumped each time a post is (re)loaded from disk; resets the front matter form. */
+  private loadCount = 0;
+  private saving: Promise<void> = Promise.resolve();
 
   get dirty(): boolean {
     return !!this.open && this.text !== this.open.savedText;
@@ -107,6 +114,7 @@ export class MdApp extends LitElement {
     super.connectedCallback();
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
+    window.addEventListener("keydown", this.onKeydown);
     this.sites = await loadSites();
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
     if (last) await this.selectSite(last, false);
@@ -116,6 +124,7 @@ export class MdApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     window.removeEventListener("focus", this.onFocus);
+    window.removeEventListener("keydown", this.onKeydown);
   }
 
   private onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -124,10 +133,11 @@ export class MdApp extends LitElement {
 
   /** Picks up edits made outside the editor (another app, git checkout, an agent). */
   private onFocus = async () => {
-    if (!this.open || !this.site || this.needsPermission) return;
-    const handle = await getFile(this.site.handle, this.open.summary.path);
-    const file = await handle?.getFile();
-    if (!file || file.lastModified <= this.open.lastModified) return;
+    const { open, site } = this;
+    if (!open || !site || this.needsPermission) return;
+    const file = await (await getFile(site.handle, open.summary.path))?.getFile();
+    // Compare contents, not times: a checkout or sync tool can keep or rewind modification times.
+    if (!file || (await file.text()) === open.savedText || this.open !== open) return;
     if (this.dirty) {
       this.changedOnDisk = true;
     } else {
@@ -177,6 +187,8 @@ export class MdApp extends LitElement {
     if (!(await this.confirmDiscard())) return;
     this.site = site;
     this.open = undefined;
+    this.postGeneration++;
+    this.sectionFilter = "*";
     this.text = "";
     this.posts = [];
     this.config = undefined;
@@ -194,19 +206,22 @@ export class MdApp extends LitElement {
   }
 
   private async loadSite() {
-    if (!this.site) return;
+    const site = this.site;
+    if (!site) return;
+    const generation = ++this.siteGeneration;
     this.loading = true;
     try {
-      const config = await readHugoConfig(this.site.handle);
+      const config = await readHugoConfig(site.handle);
       if (!config) throw new Error("No Hugo config found in this folder any more.");
+      const [posts, shortcodes] = await Promise.all([listPosts(site.handle, config), listShortcodes(site.handle, config)]);
+      if (generation !== this.siteGeneration) return;
       this.config = config;
-      const [posts, shortcodes] = await Promise.all([listPosts(this.site.handle, config), listShortcodes(this.site.handle, config)]);
       this.posts = posts;
       this.shortcodes = shortcodes;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
     } finally {
-      this.loading = false;
+      if (generation === this.siteGeneration) this.loading = false;
     }
   }
 
@@ -219,37 +234,49 @@ export class MdApp extends LitElement {
   }
 
   private async removeSite() {
-    if (!this.site || !confirm(`Remove "${this.site.name}" from the editor? Files on disk are not touched.`)) return;
+    if (!this.site || !(await this.confirmDiscard())) return;
+    if (!confirm(`Remove "${this.site.name}" from the editor? Files on disk are not touched.`)) return;
     this.sites = this.sites.filter((s) => s.id !== this.site!.id);
     await saveSites(this.sites);
     this.settingsDialog?.close();
     this.site = undefined;
     this.open = undefined;
+    this.text = "";
     this.posts = [];
+    this.siteGeneration++;
+    this.postGeneration++;
     if (this.sites[0]) await this.selectSite(this.sites[0]);
   }
 
   // ---- Posts ---------------------------------------------------------------
 
   private async confirmDiscard(): Promise<boolean> {
+    commitFocusedField();
     return !this.dirty || confirm("You have unsaved changes. Discard them?");
   }
 
-  private async openPost(summary: PostSummary, force = false) {
-    if (!this.site) return;
+  private async openPost(requested: PostSummary, force = false) {
+    const { site, config } = this;
+    if (!site) return;
     if (!force && !(await this.confirmDiscard())) return;
+    const generation = ++this.postGeneration;
     try {
-      const handle = await getFile(this.site.handle, summary.path);
-      if (!handle) throw new Error(`${summary.path} no longer exists`);
+      const handle = await getFile(site.handle, requested.path);
+      if (!handle) throw new Error(`${requested.path} no longer exists`);
       const file = await handle.getFile();
       const text = await file.text();
+      if (generation !== this.postGeneration || site !== this.site) return;
       const post = Post.parse(text);
+      // The file may have changed since the list was built: refresh its title, URL and draft state.
+      const summary = config ? summarise(requested.path, config, post, file.lastModified) : requested;
+      this.posts = sortPosts(this.posts.map((p) => (p.path === summary.path ? summary : p)));
       this.open = { summary, post, savedText: text, lastModified: file.lastModified };
+      this.loadCount++;
       this.text = text;
       this.changedOnDisk = false;
       this.error = "";
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      if (generation === this.postGeneration) this.error = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -278,21 +305,35 @@ export class MdApp extends LitElement {
     }
   }
 
-  private async save() {
-    if (!this.open || !this.site || !this.config) return;
-    const { summary } = this.open;
+  /** Saves run one at a time, so two quick saves can't interleave their writes. */
+  private save() {
+    commitFocusedField();
+    this.saving = this.saving.then(() => this.saveNow());
+    return this.saving;
+  }
+
+  private async saveNow() {
+    // Capture what is being saved: the user can keep typing, or switch post or site, while the write is pending.
+    const { open, site, config } = this;
+    const text = this.text;
+    if (!open || !site || !config || text === open.savedText) return;
+    const { path } = open.summary;
     try {
-      const handle = await getFile(this.site.handle, summary.path);
-      const onDisk = await handle?.getFile();
-      if (onDisk && onDisk.lastModified > this.open.lastModified && !confirm(`${summary.path} changed on disk since you opened it. Overwrite?`)) {
+      const onDisk = await (await getFile(site.handle, path))?.getFile();
+      if (onDisk && (await onDisk.text()) !== open.savedText && !confirm(`${path} changed on disk since you opened it. Overwrite?`)) {
         return;
       }
-      const file = await writeFile(this.site.handle, summary.path, this.text);
-      const updated = summarise(summary.path, this.config, this.open.post, file.lastModified);
-      this.open = { ...this.open, summary: updated, savedText: this.text, lastModified: file.lastModified };
-      this.posts = sortPosts(this.posts.map((p) => (p.path === updated.path ? updated : p)));
+      const file = await writeFile(site.handle, path, text);
+      const updated = summarise(path, config, Post.parse(text), file.lastModified);
+      if (site === this.site) this.posts = sortPosts(this.posts.map((p) => (p.path === path ? updated : p)));
+      if (this.open?.summary.path !== path || site !== this.site) return;
+      // Only what was written counts as saved; edits made during the write stay unsaved.
+      open.savedText = text;
+      open.lastModified = file.lastModified;
+      open.summary = updated;
+      this.open = { ...open };
       this.changedOnDisk = false;
-      this.flash(`Saved ${summary.path}`);
+      this.flash(`Saved ${path}`);
     } catch (e) {
       this.error = `Save failed: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -320,18 +361,25 @@ export class MdApp extends LitElement {
 
   /** Saves dropped/pasted images under static/images/<post slug>/ and inserts a reference. */
   private async onImageFiles(e: CustomEvent<{ files: File[] }>) {
-    if (!this.open || !this.site) return;
-    const slug = String(this.open.post.get("slug") || "") || this.open.summary.contentPath.split("/").pop()!.replace(/\.[^.]+$/, "");
+    const { open, site } = this;
+    if (!open || !site) return;
+    const slug = String(open.post.get("slug") || "") || open.summary.contentPath.split("/").pop()!.replace(/\.[^.]+$/, "");
     const dir = `images/${slugify(slug)}`;
     const snippets: string[] = [];
     for (const file of e.detail.files) {
-      const ext = file.name.match(/\.[^.]+$/)?.[0] ?? `.${file.type.split("/")[1] ?? "png"}`;
-      const base = slugify(file.name.replace(/\.[^.]+$/, "")) || `image-${Date.now()}`;
-      const url = `/${dir}/${base}${ext}`;
-      await writeFile(this.site.handle, `static${url}`, file);
+      const ext = (file.name.match(/\.[^.]+$/)?.[0] ?? `.${file.type.split("/")[1] ?? "png"}`).toLowerCase();
+      const base = slugify(file.name.replace(/\.[^.]+$/, "")) || "image";
+      // Pasted screenshots all arrive as image.png: never overwrite an existing file.
+      let url = `/${dir}/${base}${ext}`;
+      for (let n = 2; await exists(site.handle, `static${url}`); n++) url = `/${dir}/${base}-${n}${ext}`;
+      await writeFile(site.handle, `static${url}`, file);
       snippets.push(
         this.shortcodes.includes("figure") ? `{{< figure src="${url}" alt="" caption="" >}}` : `![](${url})`,
       );
+    }
+    if (this.open?.summary.path !== open.summary.path || this.site !== site) {
+      this.flash(`Saved ${snippets.length} image(s) to static/${dir}/ (not inserted: another post is open now)`);
+      return;
     }
     this.editor?.insert(snippets.join("\n\n"));
     this.flash(`Saved ${snippets.length} image${snippets.length === 1 ? "" : "s"} to static/${dir}/`);
@@ -353,12 +401,13 @@ export class MdApp extends LitElement {
     setTimeout(() => this.message === message && (this.message = ""), 3000);
   }
 
-  private onKeydown(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+  /** Ctrl/⌘+S anywhere in the app, not only in the editor (focus may be on a button, or nowhere). */
+  private onKeydown = (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void this.save();
     }
-  }
+  };
 
   // ---- Rendering -------------------------------------------------------------
 
@@ -461,13 +510,16 @@ export class MdApp extends LitElement {
             <button class="ghost" @click=${() => (this.changedOnDisk = false)}>Keep mine</button>
           </div>`
         : nothing}
-      <frontmatter-form
-        .data=${post.frontMatter}
-        .raw=${post.rawFrontMatter}
-        .format=${post.format}
-        @field-change=${this.onFieldChange}
-        @raw-change=${this.onRawChange}
-      ></frontmatter-form>
+      ${keyed(
+        `${summary.path}#${this.loadCount}`,
+        html`<frontmatter-form
+          .data=${post.frontMatter}
+          .raw=${post.rawFrontMatter}
+          .format=${post.format}
+          @field-change=${this.onFieldChange}
+          @raw-change=${this.onRawChange}
+        ></frontmatter-form>`,
+      )}
       <div class="toolbar">
         <span class="path" title=${summary.path}>${summary.path}</span>
         ${this.shortcodes.length
@@ -477,7 +529,7 @@ export class MdApp extends LitElement {
             </select>`
           : nothing}
       </div>
-      <md-editor .value=${post.body} @change=${this.onBodyChange} @save=${this.save} @image-files=${this.onImageFiles}></md-editor>
+      <md-editor .value=${post.body} @change=${this.onBodyChange} @image-files=${this.onImageFiles}></md-editor>
     </main>`;
   }
 
@@ -535,7 +587,7 @@ export class MdApp extends LitElement {
     const preview = ready && this.open && this.showPreview;
     return html`
       ${this.renderTop()}
-      <div class="body ${!ready ? "solo" : preview ? "" : "no-preview"}" @keydown=${this.onKeydown}>
+      <div class="body ${!ready ? "solo" : preview ? "" : "no-preview"}">
         ${ready ? this.renderSidebar() : nothing}
         ${ready ? this.renderEditor() : html`<main>${this.renderEmpty()}</main>`}
         ${preview
@@ -556,4 +608,16 @@ declare global {
   interface HTMLElementTagNameMap {
     "md-app": MdApp;
   }
+}
+
+/**
+ * Text fields in the front matter form commit on `change`, which fires on
+ * blur. Blurring the focused field first makes Save and the discard check see
+ * an edit that is still being typed.
+ */
+function commitFocusedField() {
+  let el = document.activeElement;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+  const host = el?.getRootNode() instanceof ShadowRoot ? (el.getRootNode() as ShadowRoot).host : undefined;
+  if (host?.localName === "frontmatter-form" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) el.blur();
 }

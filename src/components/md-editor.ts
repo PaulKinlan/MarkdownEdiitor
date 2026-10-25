@@ -140,7 +140,6 @@ export class MdEditor extends LitElement {
       shortcodes,
       editorTheme,
       keymap.of([
-        { key: "Mod-s", preventDefault: true, run: () => (this.emit("save"), true) },
         { key: "Mod-b", run: (v) => wrap(v, "**") },
         { key: "Mod-i", run: (v) => wrap(v, "_") },
         indentWithTab,

@@ -22,12 +22,15 @@ export async function saveSites(sites: SiteRecord[]): Promise<void> {
 }
 
 export async function hasPermission(handle: FileSystemHandle): Promise<boolean> {
+  // Browsers with only the origin private file system (the sample site) have no permission API, and need none.
+  if (!("queryPermission" in handle)) return true;
   return (await handle.queryPermission({ mode: "readwrite" })) === "granted";
 }
 
 /** Must be called from a user gesture when permission is in the "prompt" state. */
 export async function requestPermission(handle: FileSystemHandle): Promise<boolean> {
   if (await hasPermission(handle)) return true;
+  if (!("requestPermission" in handle)) return false;
   return (await handle.requestPermission({ mode: "readwrite" })) === "granted";
 }
 
