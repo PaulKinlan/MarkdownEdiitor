@@ -1,10 +1,11 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { defineModule, type ShellChange } from "../../core/modules";
 import { BUILTIN_ACTIONS, loadCustomActions, type ActionScope, type EditAction } from "../../lib/actions";
 import { BUILTIN_SKILLS } from "../../shared/builtin-skills";
 import { mergeSkills } from "../../shared/skills";
 import type { Edit } from "../../shared/protocol";
+import { apiUrl } from "../../lib/agent-client";
 import { Assistant, SITE_RULE_FILES } from "./assistant";
 import type { ToolsSettings } from "./tools-settings";
 
@@ -84,6 +85,7 @@ export default defineModule({
         <label>Agent server <input placeholder="This site" .value=${assistant.settings.server} @change=${(e: Event) => assistant.updateSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
         <label>Access token <input type="password" autocomplete="off" .value=${assistant.settings.token} @change=${(e: Event) => assistant.updateSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
         <div><button type="button" ?disabled=${!assistant.serverUp} @click=${showTools}>Tools and MCP servers…</button></div>
+        ${assistant.serverUp && shell.site && shell.config ? mcpAddress(apiUrl(assistant.settings, `/api/mcp/sites/${encodeURIComponent(shell.site.id)}`), shell.config.contentDir) : nothing}
         <p class="muted">Writing rules sent to the assistant: ${assistant.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>`,
     });
 
@@ -108,3 +110,13 @@ export default defineModule({
     };
   },
 });
+
+/** Where other agents (Claude Code, Gemini CLI) can reach this site's posts over MCP (worker/routes/mcp.ts). */
+function mcpAddress(url: URL, contentDir: string) {
+  if (contentDir !== "content") url.searchParams.set("contentDir", contentDir);
+  const address = url.toString();
+  return html`<p class="muted">
+    Other agents can search and read this site's posts over MCP at <code>${address}</code>, with the access token as a Bearer token.
+    <button type="button" class="small" @click=${() => void navigator.clipboard.writeText(address)}>Copy</button>
+  </p>`;
+}

@@ -7,7 +7,7 @@ A markdown editor for Hugo blogs (built for [aifoc.us](https://aifoc.us) and [pa
 | | |
 | --- | --- |
 | [The editor](docs/features/editor.md) | Local Hugo site folders, CodeMirror, a front matter form with minimal-diff saves, new posts from section templates, images, safe saves, and a live preview from your `hugo server`. |
-| [The assistant](docs/features/assistant.md) | Pi Durable agents per post and per site, any model with a key, quick edits, skills (built in, from the site folder or GitHub), research notes, web search, MCP servers and HTTP tools. |
+| [The assistant](docs/features/assistant.md) | Pi Durable agents per post and per site, any model with a key, quick edits, skills (built in, from the site folder or GitHub), research notes, web search, MCP servers and HTTP tools. The model loop runs on the agent server or on the device, and other agents can read the site over MCP. |
 | [Extensions](docs/features/extensions.md) | Pi-style extensions in Web Workers: commands, toolbar buttons, status items, underlines, panels, and agent tools, skills and hooks. The API is in [docs/extensions.md](docs/extensions.md). |
 | [Chrome features](docs/features/chrome.md) | On-device model, Summarizer drafts, folder watching, WebMCP tools and a spell check dictionary, where Chrome has them. |
 | [Installing it as an app](docs/features/pwa.md) | Offline PWA with updates on demand, file handling and share target. |
@@ -24,6 +24,7 @@ A feature should be a folder or a file, not an edit to a shared list:
 - a feature that runs in the page (side tab, settings, dialog, commands, services): `src/modules/<id>/module.ts` (see [docs/modules.md](docs/modules.md))
 - an `/api` endpoint: `worker/routes/<area>.ts`
 - a kind of assistant: `worker/agent/profiles/<kind>.ts`
+- an agent backend (where the model loop runs): `src/modules/assistant/backends/<id>.ts`
 - its documentation: `docs/features/<name>.md`, linked from the table above
 
 See `AGENTS.md` for the rest of the rules.
@@ -51,7 +52,7 @@ src/lib/sites.ts         Persisted directory handles and permissions
 src/components/          Lit elements: app shell, editor, front matter form, command palette
 src/core/modules.ts      The module API: Shell, ModuleContext, Services, Contributions
 src/modules/<id>/        One first-party module each: hugo-preview, spelling, images, webmcp, assistant
-src/modules/assistant/   The assistant: agent panel, skills and tools dialogs, connections, search index
+src/modules/assistant/   The assistant: agent panel, skills and tools dialogs, connections, search index, backends/
 src/lib/agent-client.ts  WebSocket client for agent sessions, settings
 src/lib/actions.ts       Quick edits: the built-in ones (src/quick-edits/) and the author's own
 src/quick-edits/<id>.md  One built-in quick edit each (front matter: name, scope, order)
@@ -69,6 +70,7 @@ src/shared/protocol.ts   Messages between the editor and agent sessions
 worker/index.ts          Cloudflare Worker: app assets, auth and CORS, and the router over worker/routes
 worker/route.ts          The Route type (defineRoutes, findRoute)
 worker/routes/           One file per area of /api, collected into the gitignored routes.gen.ts
+worker/mcp-server.ts     Serves Pi tools as an MCP server; worker/routes/mcp.ts offers the site's read-only tools at /api/mcp/sites/<id>
 worker/feature-store.ts  FeatureStore Durable Object: JSON values per feature and scope, so features need no class of their own
 worker/agent/conversation.ts  Base class for both sessions: Pi Durable harness, WebSocket, alarms; the Profile type
 worker/agent/profiles/   One file per kind of assistant (post, site): its context, Pi extensions and extra messages

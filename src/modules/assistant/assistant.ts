@@ -3,12 +3,11 @@
 // skills, and the search index. It follows the app through shell "change"
 // events and asks the shell to re-render when its own state changes.
 
-import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentLink, type AgentSettings } from "../../lib/agent-client";
+import { loadAgentSettings, saveAgentSettings, sessionId, type AgentConnection, type AgentLink, type AgentSettings } from "../../lib/agent-client";
 import { syncSiteIndex } from "../../lib/indexer";
 import type { ActionScope } from "../../lib/actions";
 import { exists, readText } from "../../lib/fs";
 import { sections } from "../../lib/posts";
-import { isOnDevice, OnDeviceConnection, onDeviceModels } from "../../lib/on-device";
 import { installSiteSkill, loadSiteSkills, removeSiteSkill } from "../../lib/site-skills";
 import { fetchSkillsFromGitHub, loadInstalledSkills, refreshSkill, saveInstalledSkills } from "../../lib/skill-install";
 import { mergeSkills, type Skill } from "../../shared/skills";
@@ -16,6 +15,7 @@ import type { Edit, ModelInfo, PostContext, SiteContext } from "../../shared/pro
 import type { SiteRecord } from "../../lib/sites";
 import type { Shell } from "../../core/modules";
 import type { SkillManager } from "./skills-dialog";
+import { backends, type AgentBackend, type BackendListing } from "./backend";
 
 const SCOPE_KEY = "md-editor:assistant-scope";
 export const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
@@ -45,6 +45,8 @@ export class Assistant {
   private indexTimer?: ReturnType<typeof setTimeout>;
   private fileWrites: Promise<unknown> = Promise.resolve();
   private sentSkills = "[]";
+  /** Which backend listed each model ("<provider>/<modelId>"). */
+  private owners = new Map<string, AgentBackend>();
 
   constructor(
     private shell: Shell,
@@ -107,25 +109,22 @@ export class Assistant {
 
   // ---- The agent server --------------------------------------------------------
 
-  /** Loads the model list and brings the site's search index up to date. */
+  /** Loads every backend's models and brings the site's search index up to date. */
   async connectServer() {
-    const local = await onDeviceModels();
-    let server: ModelInfo[] = [];
-    let failed = "";
-    try {
-      const config = await fetchAgentConfig(this.settings);
-      server = config.models;
-      this.serverWebSearch = config.webSearch;
-    } catch (e) {
-      failed = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
-    }
+    const listings = await Promise.all(
+      backends().map(async (backend) => ({ backend, ...(await backend.models(this.settings).catch((e): BackendListing => ({ models: [], error: String(e) }))) })),
+    );
+    this.owners = new Map(listings.flatMap((l) => l.models.map((m) => [`${m.provider}/${m.modelId}`, l.backend] as const)));
+    this.models = listings.flatMap((l) => l.models);
+    const server = listings.find((l) => l.backend.server);
+    const failed = server ? (server.error ?? "") : "There's no agent server.";
     this.serverUp = !failed;
-    this.models = [...server, ...local];
+    this.serverWebSearch = !!server?.webSearch;
     this.error = this.models.length ? "" : failed || "The agent server has no model API keys configured.";
-    if (failed && local.length) this.setStatus(`${failed}. The on-device model still works.`);
+    if (failed && this.models.length) this.setStatus(`${failed}. The other models still work.`);
     const saved = this.settings.model;
-    if (!saved || !this.models.some((m) => `${m.provider}/${m.modelId}` === saved)) {
-      const first = server.find((m) => m.provider === "anthropic") ?? this.models[0];
+    if (!saved || !this.owners.has(saved)) {
+      const first = server?.models.find((m) => m.provider === "anthropic") ?? this.models[0];
       if (first) this.setModel(`${first.provider}/${first.modelId}`);
     }
     this.shell.update();
@@ -157,11 +156,17 @@ export class Assistant {
     this.indexTimer = setTimeout(() => this.serverUp && void this.syncIndex(), 800);
   }
 
+  /** The backend a model belongs to: the one that listed it, else the agent server (until the lists load). */
+  private backendFor(model: string | undefined): AgentBackend | undefined {
+    const provider = model?.split("/")[0] ?? "";
+    return (model && this.owners.get(model)) || backends().find((b) => b.providers?.includes(provider)) || backends().find((b) => b.server);
+  }
+
   setModel(model: string) {
-    const switching = isOnDevice(model) !== isOnDevice(this.settings.model);
+    // Each backend has its own conversation.
+    const switching = this.backendFor(model) !== this.backendFor(this.settings.model);
     this.settings = { ...this.settings, model };
     saveAgentSettings(this.settings);
-    // The on-device model has its own conversation, separate from the server's.
     if (switching && this.connection) this.openConnection();
     this.shell.update();
   }
@@ -201,7 +206,9 @@ export class Assistant {
     const { open, site } = this.shell;
     if (!open || !site) return this.shell.update();
     const id = sessionId(site.id, open.summary.path);
-    this.connection = isOnDevice(this.settings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.settings, id);
+    const backend = this.backendFor(this.settings.model);
+    if (!backend) return this.shell.update();
+    this.connection = backend.connect(this.settings, id);
     this.connectedTo = { site, path: open.summary.path };
     this.shell.extensions.watch(this.connection);
     this.connection.updatePost(this.postContext()!);
@@ -224,8 +231,9 @@ export class Assistant {
   /** Opens the site assistant's connection the first time it's needed for this site. */
   private ensureSiteConnection() {
     const context = this.siteContext();
-    if (!context || this.siteConnection) return;
-    this.siteConnection = AgentConnection.forSite(this.settings, context.siteId);
+    const backend = [this.backendFor(this.siteModel), ...backends()].find((b) => b?.connectSite);
+    if (!context || this.siteConnection || !backend?.connectSite) return;
+    this.siteConnection = backend.connectSite(this.settings, context.siteId);
     this.shell.extensions.attach(this.siteConnection);
     this.siteConnection.updateSkills(this.extraSkills());
     this.sendSite();
@@ -269,14 +277,14 @@ export class Assistant {
     };
   }
 
-  /** The site assistant only runs on the agent server: it needs the site index. */
+  /** Models whose backend can hold a site-wide conversation (the agent server: it has the site index). */
   get siteModels(): ModelInfo[] {
-    return this.models.filter((m) => !isOnDevice(`${m.provider}/${m.modelId}`));
+    return this.models.filter((m) => this.owners.get(`${m.provider}/${m.modelId}`)?.connectSite);
   }
 
   get siteModel(): string {
     const saved = this.settings.model ?? "";
-    if (saved && !isOnDevice(saved)) return saved;
+    if (saved && this.owners.get(saved)?.connectSite) return saved;
     const first = this.siteModels[0];
     return first ? `${first.provider}/${first.modelId}` : "";
   }

@@ -26,10 +26,6 @@ export async function onDeviceModels(): Promise<ModelInfo[]> {
   }
 }
 
-export function isOnDevice(model: string | undefined): boolean {
-  return !!model?.startsWith(`${ON_DEVICE_PROVIDER}/`);
-}
-
 const RESPONSE_SCHEMA = {
   type: "object",
   properties: {

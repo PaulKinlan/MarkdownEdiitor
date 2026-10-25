@@ -21,6 +21,14 @@ The **Post / Site** switch at the top of the Assistant tab moves between the ope
 - **Multi-file changes for review.** `propose_changes` sends find/replace edits grouped by file, or the full text of a new file. Each file shows as a card with its edits as word diffs, plus "Open" and "Accept all" buttons. Accepted edits to other files are written to disk straight away, one at a time. Edits to the open post go into the editor like the post assistant's, so you save them yourself.
 - **Site edits.** Research, Ideas from notes, Draft from note, Tidy tags, Cross-link posts, Check internal links, Missing metadata, Plan a series and Check site rules. Any text in the message box is sent along with an edit, e.g. the topic to research. Your own edits can run on the post or on the whole site.
 
+## Agent backends
+
+The model loop runs in a backend, one file each in `src/modules/assistant/backends/`: `pi.ts` (the Pi Durable agent server, with the site index and tools) and `chrome-on-device.ts` (Chrome's built-in model, for one post, private and offline). Each lists its models for the picker and opens a conversation for a post, and the server one for the whole site too. The panel only sees chat items and proposed edits, so a new backend (next, ACP harnesses through the local helper) is a new file that implements `defineBackend()` in `src/modules/assistant/backend.ts`.
+
+## For other agents (MCP)
+
+`/api/mcp/sites/<site id>` is an MCP server (Streamable HTTP) over a site's index, so an agent such as Claude Code or Gemini CLI can use your posts too: `list_posts`, `list_terms`, `grep_posts`, `read_post`, `search_posts`, `analyze_post` (by path), `calculate`, `table_stats` and `browser_support`. It only reads; changes still go through the editor, where you review them. Send the editor token as `Authorization: Bearer <token>`, and add `?contentDir=` when the site's content isn't in `content/`. Settings → Assistant shows the address for the open site. Any Pi tool can be served this way (`worker/mcp-server.ts`); the list is in `worker/routes/mcp.ts`.
+
 ## Research notes
 
 **Notes** in the sidebar lists markdown files in `notes/` at the site root. It sits outside `content/`, so Hugo never publishes it, but it lives next to the posts and is versioned with git. A note has YAML front matter (`title`, `date`, `status`: idea, researching, ready or drafted, and `tags`) and sections for sources and notes. **Research** has the site assistant search the web and your past posts and save what it finds as a note. **Draft from note** turns a note into a draft post. Notes are indexed with the posts, so both assistants find them with `search_posts`.
