@@ -5,6 +5,7 @@ import { frontMatter, prose } from "./text.js";
 export const manifest = {
   id: "tag-suggester",
   name: "Tag suggester",
+  order: 110,
   description: "Suggests tags the site already uses that fit the post, and gives the assistant a suggest_tags tool.",
   version: "1.0.0",
   permissions: ["post:read", "site:read", "ui", "agent"],

@@ -5,6 +5,7 @@ import { lineOf, prose, sentences, syllables, words } from "./text.js";
 export const manifest = {
   id: "readability",
   name: "Readability",
+  order: 50,
   description: "Shows the post's reading grade, underlines long sentences, and gives the assistant a readability report.",
   version: "1.0.0",
   permissions: ["post:read", "ui", "agent"],

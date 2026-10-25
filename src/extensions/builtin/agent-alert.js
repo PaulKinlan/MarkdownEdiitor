@@ -4,6 +4,7 @@
 export const manifest = {
   id: "agent-alert",
   name: "Assistant alerts",
+  order: 170,
   description: "Notifies you when the assistant finishes a reply while the editor is in the background.",
   version: "1.0.0",
   permissions: ["notifications"],

@@ -1,0 +1,9 @@
+# Chrome features
+
+These turn on in Chrome when it has them. Without them the editor works as before.
+
+- **On-device model (Prompt API, Chrome 148).** "Chrome on-device model" appears in the Assistant's model picker. It runs in the browser, needs no keys or agent server, and keeps working offline. It has no tools (no search), so it answers from the post and proposes edits through the same accept/reject review. The first use downloads the model. Conversations with it last until the tab closes.
+- **Draft summaries (Summarizer API, Chrome 138).** A "Draft summary" or "Draft description" button under those front matter fields writes a short draft from the post body, on the device.
+- **Live folder watching (FileSystemObserver, Chrome 133).** Changes made outside the editor (a `git pull`, another editor, an agent) update the post list straight away, reload the open post if it has no unsaved edits, and show the "changed on disk" banner if it does. Browsers without it still check when the window gets focus.
+- **Tools for browser agents (WebMCP, origin trial in Chrome 149 to 156).** The editor registers `get_current_post`, `list_posts`, `open_post`, `insert_text`, `apply_edits`, `save_post`, `list_edits` and `run_edit`, so an agent in the browser can work with the open post. Its edits are undoable and stay unsaved until a save. To turn it on for the deployed editor, register for the trial and put the token in the `ORIGIN_TRIAL_TOKENS` repository secret (comma-separated for several); the build adds it to the page. A subdomain token for `kinlan-test.workers.dev` also covers the branch previews. Locally, enable WebMCP in `chrome://flags`.
+- **Spell check words (custom dictionary, Chrome 159).** Spell checking is on in the editor (Settings can turn it off). Words listed under Settings → Spell check words, plus the site's tags and categories, aren't marked as misspelled.

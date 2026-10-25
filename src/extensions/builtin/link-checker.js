@@ -5,6 +5,7 @@ import { lineOf } from "./text.js";
 export const manifest = {
   id: "link-checker",
   name: "Link checker",
+  order: 90,
   description: "Checks the post's links: internal ones against the site's pages and files, external ones by connecting to them.",
   version: "1.0.0",
   permissions: ["post:read", "site:read", "ui", "agent", "network"],

@@ -5,6 +5,7 @@ import { lineOf, prose } from "./text.js";
 export const manifest = {
   id: "data-checker",
   name: "Data checker",
+  order: 100,
   description: "Lists every number, date, money amount and quote in the post, and adds a skill and tools for checking them.",
   version: "1.0.0",
   permissions: ["post:read", "site:read", "ui", "agent"],

@@ -3,12 +3,18 @@
   "version": "1.0.0",
   "description": "Local-first markdown editor for Hugo blogs, hosted on Cloudflare",
   "scripts": {
+    "registries": "node scripts/registries.mjs",
+    "predev": "npm run registries",
     "dev": "vite",
+    "prebuild": "npm run registries",
     "build": "vite build",
     "preview": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
+    "pretypecheck": "npm run registries",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.sw.json",
+    "pretest": "npm run registries",
     "test": "vitest run",
+    "predev:worker": "npm run registries",
     "dev:worker": "wrangler dev --port 8787",
     "gate": "bash scripts/fast-gate.sh"
   },

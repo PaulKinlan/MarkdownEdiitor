@@ -5,6 +5,7 @@ import { bodyWords, escapeHtml, today } from "./text.js";
 export const manifest = {
   id: "writing-streak",
   name: "Writing streak",
+  order: 40,
   description: "Counts the words you write each day and shows your streak of writing days, with a history panel.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],

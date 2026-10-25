@@ -3,6 +3,7 @@
 export const manifest = {
   id: "edit-times",
   name: "Edit and save times",
+  order: 30,
   description: "Shows when you last edited and last saved the post.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],

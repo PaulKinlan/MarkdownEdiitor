@@ -11,6 +11,7 @@ export const manifest = {
   description: "Shows progress towards a word count goal.",
   version: "1.0.0",
   permissions: ["post:read", "ui"],
+  order: 50,                    // optional: place in lists, lower first (default 1000)
 };
 
 export default function (editor) {

@@ -5,6 +5,7 @@ import { prose } from "./text.js";
 export const manifest = {
   id: "repetition",
   name: "Repetition",
+  order: 60,
   description: "Underlines words repeated within a few lines of each other, and shows your most used words.",
   version: "1.0.0",
   permissions: ["post:read", "ui", "agent"],

@@ -37,6 +37,7 @@ export function checkManifest(value: unknown): ExtensionManifest {
     ...(typeof m.description === "string" ? { description: m.description.slice(0, 300) } : {}),
     ...(typeof m.version === "string" ? { version: m.version.slice(0, 20) } : {}),
     ...(m.enabledByDefault === false ? { enabledByDefault: false } : {}),
+    ...(typeof m.order === "number" && Number.isFinite(m.order) ? { order: m.order } : {}),
     permissions: [...new Set(permissions as Permission[])],
   };
 }

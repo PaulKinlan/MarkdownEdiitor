@@ -3,6 +3,7 @@
 export const manifest = {
   id: "emoji",
   name: "Emoji",
+  order: 150,
   description: "Insert an emoji from a picker (Mod-Shift-e), with your recent ones first.",
   version: "1.0.0",
   permissions: ["post:write", "ui"],

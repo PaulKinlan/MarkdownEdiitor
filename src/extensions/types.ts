@@ -59,6 +59,8 @@ export interface ExtensionManifest {
   permissions: Permission[];
   /** For built-in extensions: false leaves it off until the author turns it on. */
   enabledByDefault?: boolean;
+  /** Where it appears among extensions in lists, lower first (default 1000). */
+  order?: number;
 }
 
 /** Where an extension came from. */

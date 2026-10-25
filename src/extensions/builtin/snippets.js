@@ -5,6 +5,7 @@
 export const manifest = {
   id: "snippets",
   name: "Snippets",
+  order: 160,
   description: "Insert saved snippets of text (Mod-Shift-x), save the selection as one, or share them in the site's .editor/snippets.json.",
   version: "1.0.0",
   permissions: ["post:read", "post:write", "site:read", "ui"],

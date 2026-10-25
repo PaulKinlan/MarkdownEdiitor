@@ -4,7 +4,7 @@ Instructions for coding agents (and people) changing the Hugo Editor.
 
 ## Read first
 
-- `README.md`: what the editor does and how to run it.
+- `README.md`: what the editor does and how to run it; `docs/features/` for each feature.
 - `docs/adr/`: decisions, including what was deliberately not done.
 - `DESIGN.md` before touching UI; `THREAT_MODEL.md` before touching headers, auth, `/api` routes or manifest OS surfaces.
 
@@ -18,6 +18,7 @@ CI runs the same checks on every push.
 
 ## Rules
 
+- **A feature is a folder or a file, not an edit to a shared list.** Built-in skills go in `src/skills/<name>/SKILL.md`, quick edits in `src/quick-edits/<id>.md`, built-in extensions in `src/extensions/builtin/<id>.js`, feature docs in `docs/features/<name>.md`. Order comes from an `order` value in the file itself. Front-end code finds files with `import.meta.glob`; code the Worker needs gets a generated registry from `scripts/registries.mjs` (`*.gen.ts`, gitignored, written by npm's pre-scripts and the Vite plugin). Don't commit generated files and don't add hand-kept arrays of built-ins.
 - **Frontend:** look up the native platform feature first (the `modern-web-guidance` skill, or `npx -y modern-web-guidance@latest search "<what you need>"`) before writing code or adding a library. New client dependencies need an ADR.
 - **Feature-detect** every API that isn't Baseline, with a working fallback.
 - **Styles:** use the tokens in `src/styles.css`. No inline `style="…"` attributes and no inline scripts: the CSP will block them once it is enforced. Lit shadow roots don't get page-level rules, so shared control styles live in `src/components/shared.ts`.

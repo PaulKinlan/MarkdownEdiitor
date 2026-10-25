@@ -3,6 +3,7 @@
 export const manifest = {
   id: "autosave",
   name: "Autosave",
+  order: 130,
   description: "Saves the post a few seconds after you stop typing, or every few minutes. Pick when with the Autosave command.",
   version: "1.0.0",
   permissions: ["post:read", "post:write", "ui"],

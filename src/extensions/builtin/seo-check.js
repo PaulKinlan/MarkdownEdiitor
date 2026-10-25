@@ -5,6 +5,7 @@ import { frontMatter, headings, lineOf } from "./text.js";
 export const manifest = {
   id: "seo-check",
   name: "SEO check",
+  order: 80,
   description: "Checks title and description length, heading order, image alt text and link text, and gives the assistant an SEO report.",
   version: "1.0.0",
   permissions: ["post:read", "ui", "agent"],
