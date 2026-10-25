@@ -1,6 +1,8 @@
 import type { Env } from "../env";
 import { ConversationObject } from "./conversation";
+import { createResearchExtension } from "./research";
 import { createSiteExtension } from "./site";
+import { createSkillsExtension } from "./skills";
 import { fetchReadable, webSearcher } from "./web";
 
 /**
@@ -24,6 +26,8 @@ export class SiteSession extends ConversationObject<"site"> {
           webSearch: webSearcher(env),
           fetchUrl: fetchReadable,
         }),
+        createResearchExtension(),
+        createSkillsExtension("site", () => site()?.skills),
       ];
     });
   }

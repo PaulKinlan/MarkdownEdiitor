@@ -4,6 +4,7 @@ import type { ChatItem, Edit, FileChange, ModelInfo } from "../shared/protocol";
 import { editDecisions, type AgentLink } from "../lib/agent-client";
 import { BUILTIN_ACTIONS, SITE_ACTIONS, loadCustomActions, saveCustomActions, type ActionScope, type EditAction } from "../lib/actions";
 import { diffWords } from "../lib/diff";
+import { skillPrompt, skillsFor, skillTitle, type Skill } from "../shared/skills";
 import { controls, lightDismiss } from "./shared";
 import { icon } from "./icons";
 
@@ -45,6 +46,9 @@ export class AgentPanel extends LitElement {
       .dot.closed { background: var(--danger); }
       .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
       .actions button { min-height: 24px; padding: 0 10px; font-size: 12px; border-radius: 999px; }
+      .actions + .actions { padding-top: 0; margin-top: -1px; }
+      .actions .kind { font-size: 11px; color: var(--fg-2); align-self: center; min-width: 3.2em; }
+      .actions button.skill .icon { width: 12px; height: 12px; color: var(--accent); }
       .log { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
       /* Items keep their height when the log overflows; it scrolls instead. */
       .log > * { flex-shrink: 0; }
@@ -94,6 +98,8 @@ export class AgentPanel extends LitElement {
   @property() scope: ActionScope = "post";
   /** Whether a post is open, so the "This post" scope can be chosen. */
   @property({ type: Boolean }) hasPost = false;
+  /** Built-in skills plus the site's own, run with one click. */
+  @property({ attribute: false }) skills: Skill[] = [];
 
   @state() private custom: EditAction[] = loadCustomActions();
   @state() private error = "";
@@ -330,6 +336,7 @@ export class AgentPanel extends LitElement {
     const busy = view?.busy ?? false;
     const pending = view ? this.pendingSuggestions(view.items) : [];
     const site = this.scope === "site";
+    const skills = skillsFor(this.skills, this.scope);
     const grouped = groupBy(this.models, (m) => m.provider);
     return html`
       <div class="bar">
@@ -350,16 +357,32 @@ export class AgentPanel extends LitElement {
           ? html`<button @click=${() => this.connection?.abort()}>${icon("stop")} Stop</button>`
           : html`<button class="ghost" title="Start a new conversation" ?disabled=${!view?.items.length} @click=${() => this.connection?.reset()}>New chat</button>`}
       </div>
-      <div class="actions">
+      <div class="actions" role="group" aria-label="Edits">
+        <span class="kind">Edits</span>
         ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${`${a.prompt}\n\nText in the message box is sent with it.`} @click=${() => this.runAction(a)}>${a.name}</button>`)}
         <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
+      ${skills.length
+        ? html`<div class="actions" role="group" aria-label="Skills">
+            <span class="kind">Skills</span>
+            ${skills.map(
+              (s) => html`<button
+                class="skill"
+                ?disabled=${busy || !this.connection}
+                title=${`${s.description}${s.source === "site" ? " (from the site folder)" : ""}`}
+                @click=${() => this.send(skillPrompt(s), skillTitle(s))}
+              >
+                ${icon("sparkles")} ${skillTitle(s)}
+              </button>`,
+            )}
+          </div>`
+        : nothing}
       <div class="log" aria-live="polite">
         ${this.configError ? html`<div class="empty error">${this.configError}</div>` : nothing}
         ${!view?.items.length && !this.configError
           ? html`<div class="empty">${icon("sparkles")}<span>${site
-              ? "Ask about the whole site, or run a site edit above. To research something, type the topic below and press Research. Changes come back grouped by file, and nothing is written until you accept it."
-              : "Ask about this post, or run an edit above. Changes come back as suggestions you accept or reject."}</span></div>`
+              ? "Ask about the whole site, or run a site edit or skill above. To research something, type the topic below and press Research. Changes come back grouped by file, and nothing is written until you accept it."
+              : "Ask about this post, or run an edit or skill above. Changes come back as suggestions you accept or reject."}</span></div>`
           : nothing}
         ${view?.items.map((item) => this.renderItem(item))}
         ${view?.partial ? html`<div class="msg assistant partial">${view.partial}</div>` : nothing}

@@ -19,9 +19,12 @@ import { applyDictionary, canUseDictionary, parseWordList, siteWords } from "../
 import { listenForLaunches, persistStorage, registerServiceWorker, type Launch } from "../lib/pwa";
 import type { Edit, ModelInfo, PostContext, SiteContext } from "../shared/protocol";
 import { controls, lightDismiss } from "./shared";
-import { icon } from "./icons";
+import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import type { MdEditor } from "./md-editor";
+import { BUILTIN_SKILLS } from "../shared/builtin-skills";
+import { mergeSkills, type Skill } from "../shared/skills";
+import { loadSiteSkills } from "../lib/site-skills";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
 import "./frontmatter-form";
@@ -42,6 +45,9 @@ const TAB_KEY = "md-editor:side-tab";
 const SCOPE_KEY = "md-editor:assistant-scope";
 const SPELLCHECK_KEY = "md-editor:spellcheck";
 const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
+/** Below this width the app shows one pane at a time, switched from a bottom bar. */
+const NARROW = matchMedia("(max-width: 900px)");
+type MobileView = "posts" | "write" | "preview" | "assistant";
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 
 @customElement("md-app")
@@ -121,11 +127,43 @@ export class MdApp extends LitElement {
       dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
       dialog .actions .left { margin-right: auto; }
       dialog .seg { justify-self: start; }
+      .views { display: none; }
       @media (max-width: 900px) {
-        .body, .body.no-preview, .body.solo { grid-template-columns: 1fr; }
-        aside { max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); }
-        .side { display: none; }
+        :host { grid-template-rows: auto 1fr auto auto; --control-h: 36px; }
+        .top { padding-top: env(safe-area-inset-top, 0px); padding-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
+        .brand { margin-right: 0; }
         .brand span { display: none; }
+        .top select.site { min-width: 0; flex: 0 1 auto; }
+        .body, .body.no-preview, .body.solo { grid-template-columns: minmax(0, 1fr); }
+        aside { border-right: 0; }
+        li button { padding: 10px 12px; }
+        .side { border-left: 0; }
+        .toolbar { padding: 4px 8px 4px 12px; }
+        .status { min-height: 22px; font-size: 11px; }
+        .views {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          border-top: 1px solid var(--border);
+          background: var(--bg-2);
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        .views button {
+          all: unset;
+          display: grid;
+          justify-items: center;
+          gap: 2px;
+          padding: 8px 0 6px;
+          font-size: 11px;
+          font-weight: 500;
+          color: var(--fg-2);
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .views button .icon { width: 20px; height: 20px; }
+        .views button:hover:not(:disabled) { background: transparent; color: var(--fg); }
+        .views button[aria-current="page"] { color: var(--accent); }
+        .views button:disabled { opacity: 0.4; cursor: default; }
+        .views button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: var(--radius); }
       }
     `,
   ];
@@ -151,6 +189,8 @@ export class MdApp extends LitElement {
   @state() private showPreview = localStorage.getItem(PREVIEW_KEY) !== "false";
   @state() private sideTab: "preview" | "assistant" = localStorage.getItem(TAB_KEY) === "assistant" ? "assistant" : "preview";
   @state() private theme: Theme = getTheme();
+  @state() private narrow = NARROW.matches;
+  @state() private mobileView: MobileView = "posts";
   @state() private agentSettings: AgentSettings = loadAgentSettings();
   @state() private models: ModelInfo[] = [];
   @state() private agentError = "";
@@ -169,6 +209,8 @@ export class MdApp extends LitElement {
   /** A launch to act on once the site it needs has loaded. */
   private pendingLaunch?: { siteId?: string; path?: string; share?: Launch["share"]; action?: string };
   private siteInstructions = "";
+  /** Skills from the site folder (.agents/skills, .claude/skills), sent to the assistant with the post. */
+  @state() private siteSkills: Skill[] = [];
   private stopWatching?: () => void;
   private unregisterTools?: () => void;
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
@@ -197,6 +239,7 @@ export class MdApp extends LitElement {
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
     window.addEventListener("keydown", this.onKeydown);
+    NARROW.addEventListener("change", this.onNarrowChange);
     this.unregisterTools = registerEditorTools(this.toolHost);
     watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
@@ -211,9 +254,12 @@ export class MdApp extends LitElement {
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     window.removeEventListener("focus", this.onFocus);
     window.removeEventListener("keydown", this.onKeydown);
+    NARROW.removeEventListener("change", this.onNarrowChange);
     this.unregisterTools?.();
     this.stopWatching?.();
   }
+
+  private onNarrowChange = () => (this.narrow = NARROW.matches);
 
   private onBeforeUnload = (e: BeforeUnloadEvent) => {
     if (this.dirty) e.preventDefault();
@@ -380,9 +426,10 @@ export class MdApp extends LitElement {
       this.posts = posts;
       this.notes = notes;
       this.shortcodes = shortcodes;
-      const rules = await Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f)));
+      const [rules, skills] = await Promise.all([Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f))), loadSiteSkills(site.handle)]);
       if (generation !== this.siteGeneration) return;
       this.siteInstructions = rules.filter(Boolean).join("\n\n");
+      this.siteSkills = skills;
       void this.watch(site);
       void this.connectAgentServer();
     } catch (e) {
@@ -509,6 +556,7 @@ export class MdApp extends LitElement {
       this.loadCount++;
       this.text = text;
       if (switching || !this.connection) this.openConnection();
+      if (switching) this.mobileView = "write";
       this.changedOnDisk = false;
       this.error = "";
     } catch (e) {
@@ -765,6 +813,7 @@ export class MdApp extends LitElement {
       contentDir: this.config.contentDir,
       sections: sections(this.posts),
       ...(this.open ? { openPath: this.open.summary.path } : {}),
+      skills: this.siteSkills,
     };
   }
 
@@ -789,6 +838,8 @@ export class MdApp extends LitElement {
       path: this.open.summary.path,
       url: this.open.summary.url,
       text: this.text,
+      shortcodes: this.shortcodes,
+      skills: this.siteSkills,
     };
   }
 
@@ -928,13 +979,15 @@ export class MdApp extends LitElement {
 
   private setSideTab(tab: "preview" | "assistant") {
     this.sideTab = tab;
+    if (this.narrow) this.mobileView = tab;
     localStorage.setItem(TAB_KEY, tab);
   }
 
   updated(changed: Map<string, unknown>) {
     if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
     // Opened lazily, the first time the site assistant is on screen.
-    if (this.showPreview && this.scope === "site" && this.effectiveTab === "assistant" && this.agentServerUp) this.ensureSiteConnection();
+    const assistantShown = this.narrow ? this.mobileView === "assistant" : this.showPreview && this.effectiveTab === "assistant";
+    if (assistantShown && this.scope === "site" && this.agentServerUp) this.ensureSiteConnection();
     if (this.siteConnection && ["posts", "open", "site", "config", "siteConnection"].some((k) => changed.has(k))) {
       const context = this.siteContext();
       if (context) this.siteConnection.updateSite(context);
@@ -980,7 +1033,7 @@ export class MdApp extends LitElement {
         : nothing}
       <span class="spacer"></span>
       ${this.applyUpdate ? html`<button class="small" @click=${this.installUpdate} title="A new version of the editor is ready">${icon("refresh")} Update</button>` : nothing}
-      ${this.site && !this.needsPermission
+      ${this.site && !this.needsPermission && !this.narrow
         ? html`<button class="ghost icon-only" aria-label="Side panel" title="Preview and assistant" @click=${this.togglePreview} aria-pressed=${this.showPreview}>${icon("panel")}</button>`
         : nothing}
       <button class="primary" ?disabled=${!this.dirty} @click=${this.save} title="Save (Ctrl/⌘+S)">Save</button>
@@ -1088,6 +1141,7 @@ export class MdApp extends LitElement {
       ${keyed(
         `${summary.path}#${this.loadCount}`,
         html`<frontmatter-form
+          .collapsed=${this.narrow}
           .data=${post.frontMatter}
           .raw=${post.rawFrontMatter}
           .format=${post.format}
@@ -1184,19 +1238,19 @@ export class MdApp extends LitElement {
     `;
   }
 
-  /** With no post open there is nothing to preview, so the side panel shows the site assistant. */
+  /** With no post open (or a note, which has no URL) there is nothing to preview, so the side panel shows the assistant. */
   private get effectiveTab(): "preview" | "assistant" {
     return this.open?.summary.url ? this.sideTab : "assistant";
   }
 
-  private renderSide() {
+  private renderSide(tab = this.effectiveTab) {
     const site = this.scope === "site";
     return html`<section class="side">
-      <div class="tabs"><div class="seg" role="tablist">
-        <button role="tab" aria-selected=${this.effectiveTab === "preview"} ?disabled=${!this.open?.summary.url} @click=${() => this.setSideTab("preview")}>Preview</button>
-        <button role="tab" aria-selected=${this.effectiveTab === "assistant"} @click=${() => this.setSideTab("assistant")}>Assistant</button>
-      </div></div>
-      ${this.effectiveTab === "preview"
+      ${this.narrow ? nothing : html`<div class="tabs"><div class="seg" role="tablist">
+        <button role="tab" aria-selected=${tab === "preview"} ?disabled=${!this.open?.summary.url} @click=${() => this.setSideTab("preview")}>Preview</button>
+        <button role="tab" aria-selected=${tab === "assistant"} @click=${() => this.setSideTab("assistant")}>Assistant</button>
+      </div></div>`}
+      ${tab === "preview"
         ? html`<preview-pane
             .origin=${this.site!.previewOrigin}
             .path=${this.open!.summary.url}
@@ -1211,6 +1265,7 @@ export class MdApp extends LitElement {
             .scope=${this.scope}
             .hasPost=${!!this.open}
             @scope-change=${(e: CustomEvent<ActionScope>) => this.setScope(e.detail)}
+            .skills=${mergeSkills(BUILTIN_SKILLS, this.siteSkills)}
             @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
             @apply-edit=${this.onApplyEdit}
             @apply-file-change=${this.onApplyFileChange}
@@ -1230,8 +1285,42 @@ export class MdApp extends LitElement {
     </div>`;
   }
 
+  /** Phones: one pane at a time, with a bottom bar to move between them. */
+  private renderNarrow() {
+    const views: { id: MobileView; label: string; icon: IconName; needsPost?: boolean }[] = [
+      { id: "posts", label: "Posts", icon: "list" },
+      { id: "write", label: "Write", icon: "pen", needsPost: true },
+      { id: "preview", label: "Preview", icon: "eye", needsPost: true },
+      { id: "assistant", label: "Assistant", icon: "sparkles" },
+    ];
+    // Without an open post only the list and the site assistant make sense.
+    const view = this.open ? this.mobileView : this.mobileView === "assistant" ? "assistant" : "posts";
+    let pane;
+    if (view === "posts") pane = this.renderSidebar();
+    else if (view === "write") pane = this.renderEditor();
+    else pane = this.renderSide(view);
+    return html`
+      ${this.renderTop()}
+      <div class="body solo">${pane}</div>
+      ${this.renderStatus()}
+      <nav class="views" aria-label="Views">
+        ${views.map(
+          (v) => html`<button
+            aria-current=${view === v.id ? "page" : "false"}
+            ?disabled=${v.needsPost && !this.open}
+            @click=${() => (v.id === "preview" || v.id === "assistant" ? this.setSideTab(v.id) : (this.mobileView = v.id))}
+          >
+            ${icon(v.icon)}<span>${v.label}</span>
+          </button>`,
+        )}
+      </nav>
+      ${this.renderDialogs()}
+    `;
+  }
+
   render() {
     const ready = !!this.site && !this.needsPermission;
+    if (this.narrow && ready) return this.renderNarrow();
     const preview = ready && this.showPreview;
     return html`
       ${this.renderTop()}
