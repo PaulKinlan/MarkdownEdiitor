@@ -833,7 +833,12 @@ export class MdApp extends LitElement {
   }
 
   private async reloadSiteSkills() {
-    if (this.site) this.siteSkills = await loadSiteSkills(this.site.handle);
+    const site = this.site;
+    const generation = this.siteGeneration;
+    if (!site) return;
+    const skills = await loadSiteSkills(site.handle);
+    // Dropped if another site was opened (or this one reloaded) meanwhile.
+    if (this.site === site && generation === this.siteGeneration) this.siteSkills = skills;
   }
 
   /** The site assistant is shown with no post open, or when picked in the panel. */

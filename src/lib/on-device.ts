@@ -170,7 +170,10 @@ export class OnDeviceConnection extends EventTarget implements AgentLink {
       });
       this.partial = "Thinking on this device…";
       this.publish();
-      const input = await this.buildInput(session, post.text, inlineSkill(text, mergeSkills(BUILTIN_SKILLS, this.skills, post.skills)));
+      // A skill's text may take up to half the context window; the post is cut to fit the rest.
+      const window = session.contextWindow ?? session.inputQuota;
+      const request = inlineSkill(text, mergeSkills(BUILTIN_SKILLS, this.skills, post.skills), window ? Math.min(12_000, Math.floor((window * CHARS_PER_TOKEN) / 2)) : undefined);
+      const input = await this.buildInput(session, post.text, request);
       const raw = await session.prompt(input, { responseConstraint: RESPONSE_SCHEMA, signal: controller.signal });
       const { reply, edits } = parseResponse(raw);
       const { valid, problems } = checkEdits(post.text, edits);

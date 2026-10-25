@@ -1,4 +1,4 @@
-import { isSkillTextFile, parseSkillMarkdown, SITE_SKILL_DIRS, SKILL_TOTAL_LIMIT, type Skill, type SkillOrigin } from "../shared/skills";
+import { byteLength, isSkillTextFile, parseSkillMarkdown, SITE_SKILL_DIRS, SKILL_TOTAL_LIMIT, type Skill, type SkillOrigin } from "../shared/skills";
 import { getDir, listNames, readText, walk, writeFile } from "./fs";
 
 /** Where an installed skill came from, kept next to its SKILL.md so it can be updated. */
@@ -26,7 +26,7 @@ async function loadSkillFolder(root: FileSystemDirectoryHandle, dir: string, nam
   const skill = text ? parseSkillMarkdown(text, "site", name) : undefined;
   if (!skill) return undefined;
   const files: Record<string, string> = {};
-  let total = skill.instructions.length;
+  let total = byteLength(skill.instructions);
   for (const entry of await walk(root, dir, () => true)) {
     const path = entry.path.slice(dir.length + 1);
     if (path === "SKILL.md") continue;

@@ -104,6 +104,11 @@ export const SKILL_FILE_LIMIT = 200_000;
 export const SKILL_TOTAL_LIMIT = 1_000_000;
 const TEXT_FILE = /\.(md|markdown|txt|json|ya?ml|toml|csv|tsv|html?|css|js|mjs|ts|xml|svg)$/i;
 
+/** Size in UTF-8 bytes, the unit the limits and GitHub's file sizes use. */
+export function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 /** Whether a file next to SKILL.md is worth keeping with the skill. */
 export function isSkillTextFile(path: string, size: number): boolean {
   return TEXT_FILE.test(path) && size <= SKILL_FILE_LIMIT && !/(^|\/)\./.test(path) && !/(^|\/)LICENSE/i.test(path);
@@ -113,9 +118,23 @@ export function isSkillTextFile(path: string, size: number): boolean {
  * For models without tools (the on-device one): when `text` runs a skill,
  * appends the skill's instructions so the model doesn't need load_skill.
  */
-export function inlineSkill(text: string, skills: readonly Skill[]): string {
+export function inlineSkill(text: string, skills: readonly Skill[], maxChars = INLINE_SKILL_CHARS): string {
   const name = text.match(/^Use the ([a-z0-9-]+) skill on this post\.$/)?.[1];
   const skill = name ? skills.find((s) => s.name === name) : undefined;
   if (!skill) return text;
-  return `${text}\n\n<skill name="${skill.name}">\n${skill.instructions}\n</skill>\n\nYou have no tools here: work from the post alone, skip steps that need a tool, and say which you skipped.`;
+  // Supporting files the instructions refer to go along too, as far as the budget allows.
+  let budget = maxChars - skill.instructions.length;
+  const files: string[] = [];
+  const left: string[] = [];
+  for (const [path, body] of Object.entries(skill.files ?? {})) {
+    if (body.length <= budget) {
+      files.push(`<file path="${path}">\n${body}\n</file>`);
+      budget -= body.length;
+    } else left.push(path);
+  }
+  const omitted = left.length ? `\n\n(Files left out to fit: ${left.join(", ")}.)` : "";
+  return `${text}\n\n<skill name="${skill.name}">\n${skill.instructions}${files.length ? `\n\n${files.join("\n\n")}` : ""}\n</skill>${omitted}\n\nYou have no tools here: work from the post alone, skip steps that need a tool, and say which you skipped.`;
 }
+
+/** How much skill text goes inline to a model without tools, leaving room for the post in a small context window. */
+const INLINE_SKILL_CHARS = 12_000;

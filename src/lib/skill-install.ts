@@ -1,5 +1,5 @@
 import { get, set } from "idb-keyval";
-import { isSkillTextFile, parseSkillMarkdown, SKILL_TOTAL_LIMIT, type Skill, type SkillOrigin } from "../shared/skills";
+import { byteLength, isSkillTextFile, parseSkillMarkdown, SKILL_TOTAL_LIMIT, type Skill, type SkillOrigin } from "../shared/skills";
 
 // Installing skills from GitHub. A repo can hold one skill (SKILL.md at the
 // root) or many (any folder with a SKILL.md, e.g. skills/noslop/). The
@@ -43,22 +43,58 @@ export interface SkillCandidate {
   files: { path: string; size: number }[];
 }
 
-async function listTree(origin: SkillOrigin, fetcher: typeof fetch): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
-  const res = await fetcher(`https://api.github.com/repos/${origin.owner}/${origin.repo}/git/trees/${encodeURIComponent(origin.ref)}?recursive=1`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (res.status === 404) throw new Error(`${origin.owner}/${origin.repo} wasn't found, or it's private.`);
+const api = (origin: SkillOrigin, path: string) => `https://api.github.com/repos/${origin.owner}/${origin.repo}/${path}`;
+const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+
+async function getJson<T>(url: string, fetcher: typeof fetch): Promise<T | undefined> {
+  const res = await fetcher(url, { headers: { Accept: "application/vnd.github+json" } });
+  if (res.status === 404 || res.status === 422) return undefined;
   if (res.status === 403 || res.status === 429) throw new Error("GitHub's rate limit for this network was reached. Try again in a while.");
   if (!res.ok) throw new Error(`GitHub returned ${res.status}.`);
-  const data = (await res.json()) as { tree?: TreeEntry[]; truncated?: boolean };
-  return { entries: data.tree ?? [], truncated: !!data.truncated };
+  return (await res.json()) as T;
+}
+
+/** The git tree of the origin's folder: the root commit's tree, or the folder's entry in its parent. */
+async function treeSha(origin: SkillOrigin, fetcher: typeof fetch): Promise<string | undefined> {
+  if (!origin.path) {
+    const commit = await getJson<{ commit?: { tree?: { sha?: string } } }>(api(origin, `commits/${encodePath(origin.ref)}`), fetcher);
+    return commit?.commit?.tree?.sha;
+  }
+  const parts = origin.path.split("/");
+  const name = parts.pop()!;
+  const listing = await getJson<{ name: string; type: string; sha: string }[]>(
+    api(origin, `contents/${encodePath(parts.join("/"))}?ref=${encodeURIComponent(origin.ref)}`),
+    fetcher,
+  );
+  return Array.isArray(listing) ? listing.find((e) => e.name === name && e.type === "dir")?.sha : undefined;
+}
+
+/**
+ * Lists the origin's folder recursively, with paths relative to the repo.
+ * Listing the folder's own tree, not the repo root, keeps big repos within
+ * GitHub's limit. In a link like /tree/feature/x/skills/y the branch may
+ * contain slashes, so path segments move into the ref until one resolves.
+ */
+async function listTree(origin: SkillOrigin, fetcher: typeof fetch): Promise<{ origin: SkillOrigin; entries: TreeEntry[]; truncated: boolean }> {
+  let candidate = origin;
+  for (;;) {
+    const sha = await treeSha(candidate, fetcher);
+    if (sha) {
+      const data = await getJson<{ tree?: TreeEntry[]; truncated?: boolean }>(api(candidate, `git/trees/${sha}?recursive=1`), fetcher);
+      const prefix = candidate.path ? `${candidate.path}/` : "";
+      return { origin: candidate, entries: (data?.tree ?? []).map((e) => ({ ...e, path: prefix + e.path })), truncated: !!data?.truncated };
+    }
+    if (!candidate.path || candidate.ref === "HEAD") break;
+    const [next, ...rest] = candidate.path.split("/");
+    candidate = { ...candidate, ref: `${candidate.ref}/${next}`, path: rest.join("/") };
+  }
+  throw new Error(`${originLabel(origin)} wasn't found, or the repo is private.`);
 }
 
 /** Finds the skill folders at or under `origin.path`. */
-export async function findSkills(origin: SkillOrigin, fetcher: typeof fetch = fetch): Promise<{ skills: SkillCandidate[]; truncated: boolean }> {
-  const { entries, truncated } = await listTree(origin, fetcher);
-  const base = origin.path ? `${origin.path}/` : "";
-  const blobs = entries.filter((e) => e.type === "blob" && (e.path + "/").startsWith(base));
+export async function findSkills(source: SkillOrigin, fetcher: typeof fetch = fetch): Promise<{ skills: SkillCandidate[]; truncated: boolean }> {
+  const { origin, entries, truncated } = await listTree(source, fetcher);
+  const blobs = entries.filter((e) => e.type === "blob");
   const dirs = blobs
     .filter((e) => /(^|\/)SKILL\.md$/.test(e.path))
     .map((e) => e.path.replace(/\/?SKILL\.md$/, ""))
@@ -87,7 +123,7 @@ export interface DownloadedSkill {
 export async function downloadSkill(candidate: SkillCandidate, fetcher: typeof fetch = fetch): Promise<DownloadedSkill> {
   const { owner, repo, ref, path } = candidate.origin;
   const raw = (file: string) =>
-    `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref)}/${[path, file].filter(Boolean).join("/").split("/").map(encodeURIComponent).join("/")}`;
+    `https://raw.githubusercontent.com/${owner}/${repo}/${encodePath(ref)}/${encodePath([path, file].filter(Boolean).join("/"))}`;
   const read = async (file: string) => {
     const res = await fetcher(raw(file));
     if (!res.ok) throw new Error(`Couldn't download ${file} (${res.status}).`);
@@ -98,11 +134,11 @@ export async function downloadSkill(candidate: SkillCandidate, fetcher: typeof f
   const skill = parseSkillMarkdown(markdown, "installed", fallbackName);
   if (!skill) throw new Error(`${originLabel(candidate.origin)}/SKILL.md needs a name and description in its front matter, and instructions.`);
   const files: Record<string, string> = {};
-  let total = skill.instructions.length;
+  let total = byteLength(skill.instructions);
   for (const f of candidate.files) {
     if (f.path === "SKILL.md" || total + f.size > SKILL_TOTAL_LIMIT) continue;
     files[f.path] = await read(f.path);
-    total += files[f.path].length;
+    total += byteLength(files[f.path]);
   }
   return { skill: { ...skill, origin: candidate.origin, ...(Object.keys(files).length ? { files } : {}) }, markdown };
 }
@@ -112,7 +148,7 @@ export async function fetchSkillsFromGitHub(input: string, fetcher: typeof fetch
   const origin = parseGitHubSource(input);
   if (!origin) throw new Error("Enter a GitHub repo, like owner/repo or a github.com link to a folder.");
   const { skills, truncated } = await findSkills(origin, fetcher);
-  if (!skills.length) throw new Error(`No SKILL.md found in ${originLabel(origin)}${truncated ? " (the repo is too big to list; link to the skill's folder instead)" : ""}.`);
+  if (!skills.length) throw new Error(`No SKILL.md found in ${originLabel(origin)}${truncated ? " (the folder is too big to list; link to the skill's own folder instead)" : ""}.`);
   return { skills: await Promise.all(skills.map((s) => downloadSkill(s, fetcher))), truncated };
 }
 

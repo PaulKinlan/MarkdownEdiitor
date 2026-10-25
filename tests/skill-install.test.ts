@@ -31,13 +31,25 @@ const REPO: Record<string, string> = {
 
 function fakeGitHub(repo: Record<string, string>) {
   const calls: string[] = [];
+  const dirs = new Set(["", ...Object.keys(repo).flatMap((p) => p.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/")))]);
   const fetcher = (async (input: string | URL | Request) => {
     const url = String(input);
     calls.push(url);
-    if (url.startsWith("https://api.github.com/repos/vstaln/noslop/git/trees/")) {
-      const dirs = new Set(Object.keys(repo).flatMap((p) => p.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))));
+    const api = url.match(/^https:\/\/api\.github\.com\/repos\/vstaln\/noslop\/(.*)$/)?.[1];
+    if (api?.startsWith("commits/")) return Response.json({ commit: { tree: { sha: "dir:" } } });
+    if (api?.startsWith("contents/") || api?.startsWith("contents?")) {
+      const parent = decodeURIComponent(api.slice("contents/".length).split("?")[0]);
+      const prefix = parent ? `${parent}/` : "";
+      const children = [...dirs].filter((d) => d.startsWith(prefix) && d !== parent && !d.slice(prefix.length).includes("/"));
+      return Response.json(children.map((d) => ({ name: d.slice(prefix.length), type: "dir", sha: `dir:${d}` })));
+    }
+    if (api?.startsWith("git/trees/")) {
+      const dir = decodeURIComponent(api.slice("git/trees/".length).split("?")[0]).slice(4);
+      const prefix = dir ? `${dir}/` : "";
       return Response.json({
-        tree: [...[...dirs].map((path) => ({ path, type: "tree" })), ...Object.entries(repo).map(([path, text]) => ({ path, type: "blob", size: text.length }))],
+        tree: Object.entries(repo)
+          .filter(([path]) => path.startsWith(prefix))
+          .map(([path, text]) => ({ path: path.slice(prefix.length), type: "blob", size: text.length })),
         truncated: false,
       });
     }
@@ -58,8 +70,8 @@ describe("installing from GitHub", () => {
     expect(noslop.skill.origin).toEqual({ owner: "vstaln", repo: "noslop", ref: "HEAD", path: "skills/noslop" });
     expect(noslop.markdown).toContain("allowed-tools: Read");
     expect(skills.find((s) => s.skill.name === "nested-skill")!.skill.files).toEqual({ "notes.txt": "nested notes" });
-    // One API call to list the tree; everything else from raw downloads.
-    expect(calls.filter((c) => c.includes("api.github.com"))).toHaveLength(1);
+    // Two API calls to list the tree; everything else from raw downloads.
+    expect(calls.filter((c) => c.includes("api.github.com"))).toHaveLength(2);
     expect(calls.some((c) => c.endsWith("logo.png") || c.endsWith("cli.py"))).toBe(false);
   });
 
@@ -119,5 +131,38 @@ describe("load_skill with supporting files", () => {
       expect.arrayContaining(["alt-text", "code-check", "headline-hook", "update-notes", "quote-check", "newsletter", "image-prompts"]),
     );
     expect(BUILTIN_SKILLS).toHaveLength(14);
+  });
+});
+
+describe("review fixes", () => {
+  it("finds a branch with a slash in a /tree/ link", async () => {
+    const calls: string[] = [];
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = decodeURIComponent(String(input));
+      calls.push(url);
+      if (url.includes("/contents/skills?ref=feature/new-skill")) return Response.json([{ name: "x", type: "dir", sha: "abc" }]);
+      if (url.includes("/contents/")) return new Response("{}", { status: 404 });
+      if (url.includes("/git/trees/abc")) return Response.json({ tree: [{ path: "SKILL.md", type: "blob", size: 40 }] });
+      if (url.includes("raw.githubusercontent.com/a/b/feature/new-skill/skills/x/SKILL.md")) return new Response("---\nname: x\ndescription: d\n---\nbody");
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    const { skills } = await fetchSkillsFromGitHub("https://github.com/a/b/tree/feature/new-skill/skills/x", fetcher);
+    expect(skills[0].skill.origin).toEqual({ owner: "a", repo: "b", ref: "feature/new-skill", path: "skills/x" });
+  });
+
+  it("counts the size budget in UTF-8 bytes", async () => {
+    const big = "漢".repeat(60_000); // 180 KB in UTF-8, but 60K characters
+    const repo = { "SKILL.md": "---\nname: cjk\ndescription: d\n---\nbody", "a.md": big, "b.md": big, "c.md": big, "d.md": big, "e.md": big, "f.md": big };
+    const fetcher = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/commits/")) return Response.json({ commit: { tree: { sha: "root" } } });
+      if (url.includes("/git/trees/root")) {
+        return Response.json({ tree: Object.entries(repo).map(([path, t]) => ({ path, type: "blob", size: new TextEncoder().encode(t).length })) });
+      }
+      const path = url.split("/").pop()!;
+      return new Response(repo[path as keyof typeof repo]);
+    }) as typeof fetch;
+    const { skills } = await fetchSkillsFromGitHub("a/cjk", fetcher);
+    expect(Object.keys(skills[0].skill.files ?? {})).toEqual(["a.md", "b.md", "c.md", "d.md", "e.md"]);
   });
 });
