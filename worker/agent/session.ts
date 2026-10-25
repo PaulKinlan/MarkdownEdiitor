@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { ConversationObject } from "./conversation";
 import { createResearchExtension } from "./research";
 import { createSkillsExtension } from "./skills";
-import { fetchReadable, webSearcher } from "./web";
+import { pageFetcher, webSearcher } from "./web";
 import { createWritingExtension } from "./writing";
 
 /** One agent conversation about one post. Post text lives here only as context. */
@@ -17,10 +17,10 @@ export class AgentSession extends ConversationObject<"post"> {
           searchPosts: (query, limit) => index()?.search(query, limit) ?? Promise.resolve([]),
           readPastPost: async (path) => (await index()?.get(path)) ?? undefined,
           webSearch: webSearcher(env),
-          fetchUrl: fetchReadable,
+          fetchUrl: pageFetcher(env),
         }),
         createResearchExtension(),
-        createSkillsExtension("post", () => post()?.skills),
+        createSkillsExtension("post", () => (self as AgentSession).allSkills()),
       ];
     });
   }

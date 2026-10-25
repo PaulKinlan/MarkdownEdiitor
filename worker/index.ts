@@ -1,10 +1,15 @@
 import type { IndexedPost } from "../src/shared/protocol";
 import type { Env } from "./env";
+import type { ToolSettings } from "../src/shared/tools";
 import { createConfiguredModels, listModels } from "./agent/models";
+import { hasNativeWebSearch } from "./tools";
+import { McpClient } from "./tools/mcp";
+import { mergeHeaders } from "./tools/secrets";
 
 export { AgentSession } from "./agent/session";
 export { SiteIndex } from "./agent/site-index";
 export { SiteSession } from "./agent/site-session";
+export { ToolStore } from "./tools/store";
 export { ExtensionStore } from "./extension-store";
 
 // The editor runs in the browser against local folders. The Worker serves the
@@ -31,10 +36,36 @@ async function route(request: Request, url: URL, env: Env): Promise<Response> {
     if (!authorised(request, url, env)) return Response.json({ error: "Unauthorised" }, { status: 401 });
 
     if (url.pathname === "/api/config" && request.method === "GET") {
+      const models = createConfiguredModels(env);
       return Response.json({
-        models: listModels(createConfiguredModels(env)),
-        webSearch: Boolean(env.BRAVE_API_KEY || env.TAVILY_API_KEY),
+        models: listModels(models).map((m) => ({ ...m, ...(hasNativeWebSearch(models, m.provider, m.modelId) ? { nativeWebSearch: true } : {}) })),
+        webSearch: Boolean(env.BRAVE_API_KEY || env.TAVILY_API_KEY || env.DEEPSEEK_API_KEY),
       });
+    }
+
+    // Tool settings: MCP servers, HTTP API tools, native web tools. Secrets go in, never out.
+    if (url.pathname === "/api/tools") {
+      const store = env.TOOL_STORE.get(env.TOOL_STORE.idFromName("default"));
+      if (request.method === "GET") return Response.json(await store.publicSettings());
+      if (request.method === "PUT") {
+        // RPC typing can't see through the JSON Schema values, so name the result type here.
+        const result = (await store.save((await request.json()) as ToolSettings)) as { settings?: ToolSettings; problems?: string[] };
+        return Response.json(result, { status: result.problems ? 400 : 200 });
+      }
+    }
+
+    // Connects to an MCP server and lists its tools. `id` names a saved server whose stored secrets fill masked headers.
+    if (url.pathname === "/api/tools/mcp/discover" && request.method === "POST") {
+      const body = (await request.json()) as { url: string; headers?: Record<string, string>; id?: string };
+      const store = env.TOOL_STORE.get(env.TOOL_STORE.idFromName("default"));
+      const headers = mergeHeaders(body.headers ?? {}, body.id ? await store.headersFor(body.id) : {});
+      try {
+        const target = new URL(body.url);
+        if (target.protocol !== "https:" && target.protocol !== "http:") throw new Error("The MCP server URL must be http(s).");
+        return Response.json({ tools: await new McpClient(target.href, headers).listTools() });
+      } catch (e) {
+        return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+      }
     }
 
     // /api/sessions/:id/ws, where id names one conversation (site + post).

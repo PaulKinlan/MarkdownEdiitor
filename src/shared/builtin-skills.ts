@@ -131,4 +131,127 @@ Keep the whole critique under about 400 words.`,
 4. Reply with what is right, what is wrong (with the corrected value and the calculation), and what is weak but not wrong.
 5. Propose edits for wrong numbers and conclusions, showing the calculation in the reason. Suggest, in chat, a chart or table where the data would read better that way (the demo-builder skill can build it).`,
   },
+  {
+    name: "alt-text",
+    title: "Alt text and a11y",
+    description: "Write alt text for the post's images and check accessibility: heading order, link text, tables, color-only meaning, and embedded demos.",
+    instructions: `# Alt text and accessibility
+
+1. Run analyze_post for images without alt text, skipped heading levels and vague link text, then read the post with read_post.
+2. Alt text. You can't see the images, so work from the file name, caption, surrounding paragraphs and any figure shortcode attributes. For each image:
+   - say what the image shows that matters for the point being made, in one sentence, usually under 125 characters;
+   - don't start with "Image of" or "Picture of";
+   - for charts and diagrams, give the takeaway (the trend or the relationship), and suggest a longer description in the text or a caption if the data matters;
+   - decorative images get \`alt=""\`.
+   Propose each as an edit to the markdown image or the shortcode's alt attribute, and say in the reason that the author should check it against the actual image.
+3. Check, and propose fixes for:
+   - heading levels that skip (h2 to h4) or a second h1;
+   - link text that doesn't make sense out of context ("here", "this", bare URLs in prose);
+   - tables without a header row, or tables used for layout;
+   - meaning carried only by color or emoji;
+   - embedded HTML demos: buttons and inputs without labels, missing focus styles, motion without a \`prefers-reduced-motion\` check, keyboard traps;
+   - video or audio without captions or a transcript.
+4. Reply with a short list of what you fixed and what the author needs to check by hand.`,
+  },
+  {
+    name: "code-check",
+    title: "Check code samples",
+    description: "Check the post's code blocks for syntax errors, outdated or wrong APIs, missing context, and whether they match what the text says they do.",
+    instructions: `# Check code samples
+
+1. Read the post with read_post and find every fenced code block and inline code that names an API.
+2. For each block:
+   - check the syntax for its language, and that the fence has the right language tag;
+   - check that it does what the surrounding text claims, step by step;
+   - check names, signatures and return types of every API it uses. Use browser_support for web platform features and fetch_url on MDN, the library's docs or its repo for anything else. Flag deprecated or removed APIs and suggest the current one;
+   - look for missing context a reader needs to run it: imports, HTML it expects, permissions, a secure context, top-level await, a server;
+   - look for bugs: unhandled promise rejections, missing \`await\`, race conditions, wrong event names, leaking listeners, XSS through innerHTML, secrets in code;
+   - check it is consistent with other blocks in the post (same variable names, same version).
+3. Don't restyle working code (quotes, semicolons, formatting) unless the author asks.
+4. Reply with a list per block: OK, or what's wrong and why, with a source link for API claims.
+5. Propose edits for real errors only. Keep each fix to the lines that change.`,
+  },
+  {
+    name: "headline-hook",
+    title: "Headline and hook",
+    description: "Work on just the title and the opening: make the title specific and the first paragraph pull the reader in, without touching the rest.",
+    instructions: `# Headline and hook
+
+Only the title (and seo title or description if they exist) and the first one or two paragraphs. Leave everything else alone.
+
+1. Read the post with read_post. Write down, in one sentence, what the reader gets from the post. Everything below serves that sentence.
+2. Opening. Check whether the first paragraph:
+   - gets to the point or the tension within two or three sentences;
+   - avoids throat-clearing ("In this post I will...", "Recently I have been thinking about...", a dictionary definition, a rhetorical question);
+   - gives the reader a reason to care: a surprising fact, a concrete scene, a problem they have, or a clear claim.
+   Propose one rewrite of the opening as an edit, in the author's voice, using only facts already in the post. If the strongest line is buried later in the post, say where it is and propose moving it up.
+3. Title. In chat, give 5 options in different styles (a plain statement of the finding, a question the post answers, a how-to, a concrete number or example, and the author's own playful style if past posts show one; check with search_posts). Each must be accurate: no promise the post doesn't keep. Say which you'd pick. Don't change the title in the front matter unless asked.
+4. Keep the author's voice. No hype words, no clickbait, no colon-subtitle formula unless the author uses it.`,
+  },
+  {
+    name: "update-notes",
+    title: "Series and updates",
+    description: "When the post revisits or follows an earlier one: add cross-links both ways, an 'Update' note for the old post, and series front matter.",
+    instructions: `# Series and update notes
+
+1. Read the post with read_post. Use search_posts (several queries on its main topics and named things) and read_past_post to find earlier posts it continues, corrects or contradicts.
+2. For this post, propose edits that:
+   - mention and link the earlier post near where it becomes relevant, saying what changed since ("Two years ago I argued X; here's what changed.");
+   - add series front matter if the site uses it (check related posts for a \`series\`, \`related\` or similar field and reuse the same key and value).
+3. For each earlier post, you can't edit it from here. Instead, draft in chat the exact text to add to it, in the author's voice:
+   - an "Update (date):" note for the top or the relevant section, one or two sentences, linking to this post;
+   - which existing sentence it belongs after.
+   Give the earlier post's path so the author can open it.
+4. If this post contradicts an earlier one, say so plainly and suggest whether the old post needs a correction note rather than just a link.`,
+  },
+  {
+    name: "quote-check",
+    title: "Check quotes",
+    description: "Verify every quote and attribution in the post word for word against the original source, and fix misquotes and missing links.",
+    instructions: `# Check quotes and citations
+
+1. Read the post with read_post. List every direct quote (in quotation marks or blockquotes), paraphrase attributed to a named person or organization, and "according to" claim.
+2. For each, find the original: the first-party source (the talk, paper, post, interview transcript, docs, or social post), not an article that repeats it. Use web_search and fetch_url.
+3. Compare word for word. Report:
+   - **exact**: matches the source;
+   - **altered**: words changed, cut without an ellipsis, or merged from two places; give the original wording;
+   - **misattributed**: someone else said it, or it's commonly misattributed (check quote-investigation sites);
+   - **out of context**: the source says something different once you read around it;
+   - **not found**: you couldn't find a source.
+4. Check each quote has a link to its source, and that the link goes to the original, not an aggregator.
+5. Propose edits that fix the wording to match the source, add the source link to the existing words, or soften an unverified quote to a paraphrase. Never invent a source.`,
+  },
+  {
+    name: "newsletter",
+    title: "Newsletter digest",
+    description: "Turn the post into a short newsletter section: a subject line, a teaser, the key points and a link, in the author's voice.",
+    instructions: `# Newsletter digest
+
+Write in chat; don't propose edits to the post.
+
+1. Read the post with read_post. Find its main point, the two or three most useful details, and the best single line.
+2. If the author's past posts include newsletters or "weekly" round-ups (check with search_posts), match their format and tone.
+3. Write:
+   - **Subject line**: under 50 characters, specific, no clickbait. Give two options.
+   - **Preview text**: under 90 characters, adding to the subject rather than repeating it.
+   - **Section**: a heading, then 80 to 150 words: what the post is about and why it matters to the reader, the key points as two or three short bullets or sentences, and a call to read the full post with its full URL (the site URL plus the post's path).
+   - **One-line version**: a single sentence with the link, for a round-up list.
+4. Use only facts from the post. Keep the author's voice: plain and direct, with no hype words or exclamation marks unless the author uses them.`,
+  },
+  {
+    name: "image-prompts",
+    title: "Image prompts",
+    description: "Draft prompts and captions for a header image, social card and diagrams that explain the post, matching the site's existing image style.",
+    instructions: `# Image prompts and captions
+
+Write in chat; propose edits only for captions or alt text the author asks for.
+
+1. Read the post with read_post and run analyze_post. Check the front matter for image fields (image, images, cover, featured, og_image) and look at one or two related posts' front matter with read_past_post to see what kind of images the site uses.
+2. Header or social image: give 3 concepts. Each one is a visual metaphor or concrete scene tied to the post's main point, not generic "AI brain" or "glowing network" imagery. For each, write:
+   - a prompt for an image model: subject, composition, style, color palette, aspect ratio (1200x630 for social cards, or the site's existing ratio). Say "no text in the image" unless text is the point;
+   - alt text;
+   - a one-line caption if the site uses captions.
+3. Diagrams: find up to 3 places where a diagram explains something better than prose (a process, an architecture, a comparison, a timeline). For each, say where it goes and what it shows, and give either a Mermaid or SVG sketch, or a prompt for an image model. If it needs interactivity, suggest the demo-builder skill instead.
+4. Don't suggest images of real people or company logos unless the post is about them.`,
+  },
 ];

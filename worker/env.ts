@@ -1,6 +1,7 @@
 import type { AgentSession } from "./agent/session";
 import type { SiteIndex } from "./agent/site-index";
 import type { SiteSession } from "./agent/site-session";
+import type { ToolStore } from "./tools/store";
 import type { ExtensionStore } from "./extension-store";
 
 export interface Env {
@@ -8,6 +9,8 @@ export interface Env {
   AGENT_SESSION: DurableObjectNamespace<AgentSession>;
   SITE_INDEX: DurableObjectNamespace<SiteIndex>;
   SITE_SESSION: DurableObjectNamespace<SiteSession>;
+  /** The author's MCP servers and HTTP API tools, shared by every agent. */
+  TOOL_STORE: DurableObjectNamespace<ToolStore>;
   EXTENSION_STORE: DurableObjectNamespace<ExtensionStore>;
   /** When set, every /api request must carry it (Authorization: Bearer, or ?token= for WebSockets). */
   EDITOR_TOKEN?: string;

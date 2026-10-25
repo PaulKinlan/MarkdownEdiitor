@@ -23,7 +23,9 @@ import { icon, type IconName } from "./icons";
 import { getTheme, setTheme, watchTheme, type Theme } from "../lib/theme";
 import { BUILTIN_SKILLS } from "../shared/builtin-skills";
 import { mergeSkills, type Skill } from "../shared/skills";
-import { loadSiteSkills } from "../lib/site-skills";
+import { installSiteSkill, loadSiteSkills, removeSiteSkill } from "../lib/site-skills";
+import { fetchSkillsFromGitHub, loadInstalledSkills, refreshSkill, saveInstalledSkills } from "../lib/skill-install";
+import type { SkillManager } from "./skills-dialog";
 import { ExtensionController } from "../extensions/controller";
 import type { PostSnapshot } from "../extensions/types";
 import type { EditAction } from "../lib/actions";
@@ -35,6 +37,8 @@ import "./frontmatter-form";
 import "./preview-pane";
 import "./agent-panel";
 import "./extensions-dialog";
+import "./tools-settings";
+import type { ToolsSettings } from "./tools-settings";
 
 interface OpenPost {
   summary: PostSummary;
@@ -222,17 +226,22 @@ export class MdApp extends LitElement {
   private siteInstructions = "";
   /** Skills from the site folder (.agents/skills, .claude/skills), sent to the assistant with the post. */
   @state() private siteSkills: Skill[] = [];
+  /** Skills installed from GitHub for every site, kept in this browser. */
+  @state() private installedSkills: Skill[] = [];
   private stopWatching?: () => void;
   private unregisterTools?: () => void;
   /** Writes in flight. Watcher events for the editor's own saves are ignored while one runs. */
   private writing = 0;
   @state() private agentServerUp = false;
+  /** The agent server has a key for web_search (DeepSeek, Brave or Tavily). */
+  @state() private serverWebSearch = false;
 
   @query("md-editor") private editor?: MdEditor;
   @query("preview-pane") private preview?: PreviewPane;
   @query("#new-post") private newPostDialog?: HTMLDialogElement;
   @query("#site-settings") private settingsDialog?: HTMLDialogElement;
   @query("extensions-dialog") private extensionsDialog?: ExtensionsDialog;
+  @query("tools-settings") private toolsSettings?: ToolsSettings;
 
   private readonly supportsPicker = "showDirectoryPicker" in window;
   // Bumped on each site or post load, so a slow load that finishes after the user moved on is dropped.
@@ -281,6 +290,7 @@ export class MdApp extends LitElement {
     void this.extensions.load();
     watchTheme((theme) => (this.theme = theme));
     void registerServiceWorker((apply) => (this.applyUpdate = apply));
+    void loadInstalledSkills().then((skills) => (this.installedSkills = skills));
     this.sites = await loadSites();
     listenForLaunches((launch) => void this.onLaunch(launch));
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
@@ -301,12 +311,12 @@ export class MdApp extends LitElement {
 
   private onExtensionsChange = () => {
     this.extensionsVersion++;
-    // Extension skills travel with the post context; send it again only when they change.
+    // Extension skills go with the other skills; send them again only when they change.
     const skills = JSON.stringify(this.extensions.host.skills);
-    if (skills !== this.sentSkills && this.connection && this.open) this.connection.updatePost(this.postContext()!);
-    const site = this.siteContext();
-    if (skills !== this.sentSkills && this.siteConnection && site) this.siteConnection.updateSite(site);
+    if (skills === this.sentSkills) return;
     this.sentSkills = skills;
+    this.connection?.updateSkills(this.extraSkills());
+    this.siteConnection?.updateSkills(this.extraSkills());
   };
   private sentSkills = "[]";
   private onNarrowChange = () => (this.narrow = NARROW.matches);
@@ -776,7 +786,9 @@ export class MdApp extends LitElement {
     let server: ModelInfo[] = [];
     let failed = "";
     try {
-      server = (await fetchAgentConfig(this.agentSettings)).models;
+      const config = await fetchAgentConfig(this.agentSettings);
+      server = config.models;
+      this.serverWebSearch = config.webSearch;
     } catch (e) {
       failed = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -837,6 +849,61 @@ export class MdApp extends LitElement {
     this.connection = isOnDevice(this.agentSettings.model) ? new OnDeviceConnection(id) : new AgentConnection(this.agentSettings, id);
     this.extensions.watch(this.connection);
     this.connection.updatePost(this.postContext()!);
+    this.connection.updateSkills(this.extraSkills());
+  }
+
+  /** Skills beyond the built-in ones: extensions', then installed, then the site's own, each replacing an earlier one with the same name. */
+  private extraSkills(): Skill[] {
+    return mergeSkills(this.extensions.host.skills, this.installedSkills, this.siteSkills);
+  }
+
+  private skillManager(): SkillManager {
+    const site = this.site;
+    return {
+      hasSite: !!site && !this.needsPermission,
+      install: async (source, target) => {
+        const { skills } = await fetchSkillsFromGitHub(source);
+        if (target === "site") {
+          if (!site) throw new Error("Open a site first.");
+          for (const { skill, markdown } of skills) await installSiteSkill(site.handle, skill, markdown);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(mergeSkills(this.installedSkills, skills.map((d) => ({ ...d.skill, source: "installed" }))));
+        }
+        return skills.map((d) => d.skill.name);
+      },
+      update: async (skill) => {
+        const { skill: fresh, markdown } = await refreshSkill(skill);
+        if (skill.source === "site" && site) {
+          await installSiteSkill(site.handle, fresh, markdown, skill.folder);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(this.installedSkills.map((s) => (s.name === skill.name ? { ...fresh, source: "installed" } : s)));
+        }
+      },
+      remove: async (skill) => {
+        if (skill.source === "site" && site && skill.folder) {
+          await removeSiteSkill(site.handle, skill.folder);
+          await this.reloadSiteSkills();
+        } else {
+          await this.saveInstalled(this.installedSkills.filter((s) => s.name !== skill.name));
+        }
+      },
+    };
+  }
+
+  private async saveInstalled(skills: Skill[]) {
+    await saveInstalledSkills(skills);
+    this.installedSkills = skills;
+  }
+
+  private async reloadSiteSkills() {
+    const site = this.site;
+    const generation = this.siteGeneration;
+    if (!site) return;
+    const skills = await loadSiteSkills(site.handle);
+    // Dropped if another site was opened (or this one reloaded) meanwhile.
+    if (this.site === site && generation === this.siteGeneration) this.siteSkills = skills;
   }
 
   /** The site assistant is shown with no post open, or when picked in the panel. */
@@ -875,7 +942,6 @@ export class MdApp extends LitElement {
       contentDir: this.config.contentDir,
       sections: sections(this.posts),
       ...(this.open ? { openPath: this.open.summary.path } : {}),
-      skills: [...this.siteSkills, ...this.extensions.host.skills],
     };
   }
 
@@ -901,7 +967,6 @@ export class MdApp extends LitElement {
       url: this.open.summary.url,
       text: this.text,
       shortcodes: this.shortcodes,
-      skills: [...this.siteSkills, ...this.extensions.host.skills],
     };
   }
 
@@ -1091,9 +1156,11 @@ export class MdApp extends LitElement {
   updated(changed: Map<string, unknown>) {
     if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
     if (changed.has("text") && this.open && changed.get("text") !== undefined) this.extensions.postChanged();
+    if ((changed.has("siteSkills") || changed.has("installedSkills")) && this.connection) this.connection.updateSkills(this.extraSkills());
     // Opened lazily, the first time the site assistant is on screen.
     const assistantShown = this.narrow ? this.mobileView === "assistant" : this.showPreview && this.effectiveTab === "assistant";
     if (assistantShown && this.scope === "site" && this.agentServerUp) this.ensureSiteConnection();
+    if (this.siteConnection && (changed.has("siteSkills") || changed.has("installedSkills") || changed.has("siteConnection"))) this.siteConnection.updateSkills(this.extraSkills());
     if (this.siteConnection && ["posts", "open", "site", "config", "siteConnection"].some((k) => changed.has(k))) {
       const context = this.siteContext();
       if (context) this.siteConnection.updateSite(context);
@@ -1337,6 +1404,7 @@ export class MdApp extends LitElement {
               <h4>Assistant</h4>
               <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
               <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
+              <div><button type="button" ?disabled=${!this.agentServerUp} @click=${() => this.toolsSettings?.show()}>Tools and MCP servers…</button></div>
               <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
@@ -1348,6 +1416,7 @@ export class MdApp extends LitElement {
           : nothing}
       </dialog>
       <extensions-dialog .controller=${this.extensions}></extensions-dialog>
+      <tools-settings .agentSettings=${this.agentSettings} ?webSearch=${this.serverWebSearch}></tools-settings>
     `;
   }
 
@@ -1407,7 +1476,8 @@ export class MdApp extends LitElement {
             .scope=${this.scope}
             .hasPost=${!!this.open}
             @scope-change=${(e: CustomEvent<ActionScope>) => this.setScope(e.detail)}
-            .skills=${mergeSkills(BUILTIN_SKILLS, [...this.siteSkills, ...this.extensions.host.skills])}
+            .skills=${mergeSkills(BUILTIN_SKILLS, this.extraSkills())}
+            .skillManager=${this.skillManager()}
             @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
             @apply-edit=${this.onApplyEdit}
             .extensionActions=${this.extensions.host.quickEdits.map(

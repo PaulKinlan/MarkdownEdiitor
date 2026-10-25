@@ -19,7 +19,8 @@ describe("skill files", () => {
     expect(parseSkillMarkdown("---\ndescription: d\n---\nbody", "site", "my-skill")?.name).toBe("my-skill");
     expect(parseSkillMarkdown("---\nname: x\n---\nbody")).toBeUndefined();
     expect(parseSkillMarkdown("---\nname: x\ndescription: d\n---\n")).toBeUndefined();
-    expect(parseSkillMarkdown("---\nname: Not Valid!\ndescription: d\n---\nbody")).toBeUndefined();
+    expect(parseSkillMarkdown("---\nname: Not Valid!\ndescription: d\n---\nbody")?.name).toBe("not-valid");
+    expect(parseSkillMarkdown("---\nname: \"!!!\"\ndescription: d\n---\nbody")).toBeUndefined();
     expect(parseSkillMarkdown("---\nname: [unclosed\n---\nbody")).toBeUndefined();
   });
 
@@ -43,6 +44,10 @@ describe("skill files", () => {
     const skill = BUILTIN_SKILLS[0];
     expect(inlineSkill(skillPrompt(skill), BUILTIN_SKILLS)).toContain(skill.instructions);
     expect(inlineSkill("Fix my intro", BUILTIN_SKILLS)).toBe("Fix my intro");
+    const withFiles = { name: "noslop", description: "d", instructions: "Read bans.md.", files: { "bans.md": "No delve.", "long.md": "x".repeat(500) } };
+    const inlined = inlineSkill("Use the noslop skill on this post.", [withFiles], 200);
+    expect(inlined).toContain('<file path="bans.md">\nNo delve.');
+    expect(inlined).toContain("Files left out to fit: long.md");
   });
 });
 

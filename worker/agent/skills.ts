@@ -15,8 +15,12 @@ export function createSkillsExtension(scope: "post" | "site", extra: () => reado
 
   const loadSkill = defineTool({
     name: "load_skill",
-    description: "Load a skill's full instructions by name, from the skills listed in the system prompt. Call it before doing the task a skill covers, then follow the instructions.",
-    parameters: Type.Object({ name: Type.String({ description: "The skill's name, e.g. fact-check" }) }),
+    description:
+      "Load a skill's full instructions by name, from the skills listed in the system prompt. Call it before doing the task a skill covers, then follow the instructions. Some skills have supporting files their instructions refer to; load one with `file`.",
+    parameters: Type.Object({
+      name: Type.String({ description: "The skill's name, e.g. fact-check" }),
+      file: Type.Optional(Type.String({ description: "A supporting file's path, as load_skill listed it, e.g. style-and-bans.md" })),
+    }),
     replay: "safe",
     execute: async (args) => {
       const all = skills();
@@ -24,7 +28,19 @@ export function createSkillsExtension(scope: "post" | "site", extra: () => reado
       if (!skill) {
         return { output: [{ type: "text", text: `No skill named ${args.name}. Available: ${all.map((s) => s.name).join(", ") || "none"}.` }], isError: true };
       }
-      return { output: [{ type: "text", text: skill.instructions }] };
+      const files = Object.keys(skill.files ?? {}).sort();
+      if (args.file) {
+        const path = args.file.trim().replace(/^\.?\//, "");
+        const text = skill.files?.[path];
+        if (text === undefined) {
+          return { output: [{ type: "text", text: `${skill.name} has no file ${args.file}. Files: ${files.join(", ") || "none"}.` }], isError: true };
+        }
+        return { output: [{ type: "text", text }] };
+      }
+      const listing = files.length
+        ? `\n\n---\nSupporting files for this skill (load one with load_skill({ name: "${skill.name}", file })): ${files.join(", ")}`
+        : "";
+      return { output: [{ type: "text", text: skill.instructions + listing }] };
     },
   });
 

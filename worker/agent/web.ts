@@ -2,7 +2,7 @@ import type { Env } from "../env";
 
 export type WebResult = { title: string; url: string; snippet: string };
 
-/** Web search through Brave or Tavily, whichever has a key. Undefined when neither is configured. */
+/** Web search through Brave, Tavily or DeepSeek, the first with a key. Undefined when none is configured. */
 export function webSearcher(env: Env): ((query: string, limit: number) => Promise<WebResult[]>) | undefined {
   if (env.BRAVE_API_KEY) {
     const key = env.BRAVE_API_KEY;
@@ -27,7 +27,46 @@ export function webSearcher(env: Env): ((query: string, limit: number) => Promis
       return (data.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: (r.content ?? "").slice(0, 300) }));
     };
   }
+  if (env.DEEPSEEK_API_KEY) {
+    const key = env.DEEPSEEK_API_KEY;
+    return async (query, limit) => {
+      const res = await fetch(`${DEEPSEEK_TOOLS}/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ query: query.slice(0, 128), count: limit }),
+      });
+      if (!res.ok) throw new Error(`DeepSeek search failed: ${res.status}`);
+      const data = (await res.json()) as { results?: { title: string; url: string; snippet?: string; summary?: string; date?: string | null }[] };
+      return (data.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: `${r.date ? `${r.date.slice(0, 10)} ` : ""}${r.summary || r.snippet || ""}`.slice(0, 600) }));
+    };
+  }
   return undefined;
+}
+
+const DEEPSEEK_TOOLS = "https://api.deepseek.com/v1/tools";
+
+/** Page reader: DeepSeek Fetch (clean markdown) when there's a key, falling back to fetching the page ourselves. */
+export function pageFetcher(env: Env): (url: string) => Promise<string> {
+  const key = env.DEEPSEEK_API_KEY;
+  if (!key) return fetchReadable;
+  return async (url) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Only http(s) URLs can be fetched");
+    try {
+      const res = await fetch(`${DEEPSEEK_TOOLS}/fetch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ url: parsed.href }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { title?: string; content?: string };
+        if (data.content) return truncate(`${data.title ? `# ${data.title}\n\n` : ""}${data.content}`);
+      }
+    } catch {
+      // Fall through to a direct fetch.
+    }
+    return fetchReadable(url);
+  };
 }
 
 const MAX_CHARS = 12_000;
