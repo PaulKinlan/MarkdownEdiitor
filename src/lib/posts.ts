@@ -2,6 +2,7 @@ import { Post, toDate, type FrontMatterData, type FrontMatterFormat } from "./fr
 import { isContentFile, permalinkFor, type HugoConfig } from "./hugo";
 import { walk } from "./fs";
 import { slugify } from "./slug";
+import { NOTES_DIR } from "../shared/notes";
 
 export interface PostSummary {
   /** Path relative to the site root, e.g. "content/posts/hello.md". */
@@ -19,7 +20,15 @@ export interface PostSummary {
 }
 
 export async function listPosts(root: FileSystemDirectoryHandle, config: HugoConfig): Promise<PostSummary[]> {
-  const entries = await walk(root, config.contentDir, isContentFile);
+  return summariseAll(await walk(root, config.contentDir, isContentFile), config);
+}
+
+/** Research notes and ideas: markdown files under notes/ at the site root. */
+export async function listNotes(root: FileSystemDirectoryHandle, config: HugoConfig): Promise<PostSummary[]> {
+  return summariseAll(await walk(root, NOTES_DIR, (name) => /\.(md|markdown)$/i.test(name)), config);
+}
+
+async function summariseAll(entries: Awaited<ReturnType<typeof walk>>, config: HugoConfig): Promise<PostSummary[]> {
   const out: PostSummary[] = [];
   // Bounded concurrency: paul.kinlan.me has ~800 files and a burst of reads is slower than a steady pipe.
   let i = 0;
@@ -38,8 +47,10 @@ export async function listPosts(root: FileSystemDirectoryHandle, config: HugoCon
   return sortPosts(out);
 }
 
+/** Summarises a post, or a note (a file outside the content directory, which has no URL). */
 export function summarise(path: string, config: HugoConfig, post: Post, lastModified: number): PostSummary {
-  const contentPath = path.slice(config.contentDir.length + 1);
+  const inContent = path.startsWith(`${config.contentDir}/`);
+  const contentPath = inContent ? path.slice(config.contentDir.length + 1) : path;
   const fm = post.frontMatter;
   const section = contentPath.includes("/") ? contentPath.split("/")[0] : "";
   return {
@@ -51,9 +62,16 @@ export function summarise(path: string, config: HugoConfig, post: Post, lastModi
     draft: fm.draft === true || fm.draft === "true",
     format: post.format,
     frontMatter: fm,
-    url: permalinkFor(contentPath, fm, config),
+    url: inContent ? permalinkFor(contentPath, fm, config) : "",
     lastModified,
   };
+}
+
+/** A new research note: YAML front matter with a status, and a body to collect links and thoughts in. */
+export function newNote(title: string, now = new Date()) {
+  const slug = slugify(title) || `note-${now.getTime()}`;
+  const post = Post.create("yaml", { title, date: now.toISOString(), status: "idea", tags: [] }, "\n## Sources\n\n## Notes\n");
+  return { path: `${NOTES_DIR}/${slug}.md`, post };
 }
 
 export function sortPosts(posts: PostSummary[]): PostSummary[] {
