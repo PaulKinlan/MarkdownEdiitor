@@ -21,6 +21,8 @@ A feature should be a folder or a file, not an edit to a shared list:
 - a built-in skill: `src/skills/<name>/SKILL.md`
 - a built-in quick edit: `src/quick-edits/<id>.md`
 - a built-in extension: `src/extensions/builtin/<id>.js`
+- an `/api` endpoint: `worker/routes/<area>.ts`
+- a kind of assistant: `worker/agent/profiles/<kind>.ts`
 - its documentation: `docs/features/<name>.md`, linked from the table above
 
 See `AGENTS.md` for the rest of the rules.
@@ -60,8 +62,12 @@ src/lib/pwa.ts           Service worker registration and updates, file/share/sho
 src/sw/service-worker.ts Service worker (built to dist/sw.js by the plugin in vite.config.ts)
 public/                  Web app manifest, icons, Cloudflare _headers
 src/shared/protocol.ts   Messages between the editor and agent sessions
-worker/index.ts          Cloudflare Worker: app assets and /api routes
-worker/agent/conversation.ts  Base class for both sessions: Pi Durable harness, WebSocket, alarms
+worker/index.ts          Cloudflare Worker: app assets, auth and CORS, and the router over worker/routes
+worker/route.ts          The Route type (defineRoutes, findRoute)
+worker/routes/           One file per area of /api, collected into the gitignored routes.gen.ts
+worker/feature-store.ts  FeatureStore Durable Object: JSON values per feature and scope, so features need no class of their own
+worker/agent/conversation.ts  Base class for both sessions: Pi Durable harness, WebSocket, alarms; the Profile type
+worker/agent/profiles/   One file per kind of assistant (post, site): its context, Pi extensions and extra messages
 worker/agent/session.ts  AgentSession Durable Object (one conversation per post)
 worker/agent/site-session.ts  SiteSession Durable Object (one conversation per site)
 worker/agent/writing.ts  The writing extension (post assistant): tools and system prompt sections

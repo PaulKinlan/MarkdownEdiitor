@@ -65,29 +65,52 @@ export interface Edit {
   reason?: string;
 }
 
-export type ClientToServer =
-  | { type: "post"; post: PostContext }
+/**
+ * Messages from the editor to a session, by `type`. A feature adds its own
+ * next to its code instead of editing this list:
+ *
+ *   declare module "../shared/protocol" {
+ *     interface ClientMessages { "git:status": { paths: string[] } }
+ *   }
+ *
+ * and registers a handler for it (a profile's `messages` on the server).
+ */
+export interface ClientMessages {
+  post: { post: PostContext };
   /** Every skill beyond the built-in ones (site folder, installed, extensions). Sent on connect and when they change. */
-  | { type: "skills"; skills: Skill[] }
-  | { type: "site"; site: SiteContext }
-  | { type: "prompt"; text: string; model: ModelRef; requestId: string; label?: string }
-  | { type: "abort" }
-  | { type: "reset" }
+  skills: { skills: Skill[] };
+  site: { site: SiteContext };
+  prompt: { text: string; model: ModelRef; requestId: string; label?: string };
+  abort: {};
+  reset: {};
   /** The editor extensions that are enabled now; replaces the previous set. */
-  | { type: "extensions"; extensions: AgentExtensionSpec[] }
+  extensions: { extensions: AgentExtensionSpec[] };
   /** The answer to an `extension_call`. */
-  | { type: "extension_result"; callId: string; ok: boolean; value?: unknown; error?: string };
+  extension_result: { callId: string; ok: boolean; value?: unknown; error?: string };
+}
+
+/** Messages from a session to the editor, by `type`; extended the same way as ClientMessages. */
+export interface ServerMessages {
+  view: { items: ChatItem[]; busy: boolean; partial?: string; usage?: { cost: number; tokens: number } };
+  error: { message: string };
+  /** The agent wants an editor extension to run a tool or hook; answered with `extension_result`. */
+  extension_call: { callId: string; call: ExtensionCall };
+}
+
+type Union<M> = { [K in keyof M]: { type: K } & M[K] }[keyof M];
+
+export type ClientToServer = Union<ClientMessages>;
+
+export type ServerToClient = Union<ServerMessages>;
+
+/** One message of a given type. */
+export type ClientMessage<K extends keyof ClientMessages> = Extract<ClientToServer, { type: K }>;
+export type ServerMessage<K extends keyof ServerMessages> = Extract<ServerToClient, { type: K }>;
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string; label?: string }
   | { kind: "assistant"; id: number; text: string; error?: string; model?: string }
   | { kind: "tool"; id: number; callId: string; name: string; args: unknown; status: "running" | "done" | "error"; summary?: string; edits?: Edit[]; changes?: FileChange[] };
-
-export type ServerToClient =
-  | { type: "view"; items: ChatItem[]; busy: boolean; partial?: string; usage?: { cost: number; tokens: number } }
-  | { type: "error"; message: string }
-  /** The agent wants an editor extension to run a tool or hook; answered with `extension_result`. */
-  | { type: "extension_call"; callId: string; call: ExtensionCall };
 
 export interface IndexedPost {
   path: string;

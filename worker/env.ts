@@ -4,6 +4,7 @@ import type { SiteSession } from "./agent/site-session";
 import type { ToolStore } from "./tools/store";
 import type { ExtensionStore } from "./extension-store";
 import type { Observability } from "./observability/store";
+import type { FeatureStore } from "./feature-store";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -15,6 +16,8 @@ export interface Env {
   /** Installed editor extensions (see worker/extension-store.ts). */
   EXTENSION_STORE: DurableObjectNamespace<ExtensionStore>;
   OBSERVABILITY: DurableObjectNamespace<Observability>;
+  /** Storage for any feature, one instance per feature and scope (see worker/feature-store.ts). */
+  FEATURE_STORE: DurableObjectNamespace<FeatureStore>;
   /** The deployed commit, set by the deploy workflow (--var COMMIT:<sha>). Reported by /api/health. */
   COMMIT?: string;
   /** "1" makes installed copies unregister their service worker and clear caches (emergency switch). */

@@ -1,4 +1,4 @@
-import type { ClientToServer, ModelInfo, PostContext, ServerToClient, SiteContext } from "../shared/protocol";
+import type { ClientToServer, ModelInfo, PostContext, ServerMessage, ServerMessages, ServerToClient, SiteContext } from "../shared/protocol";
 import type { AgentExtensionSpec, ExtensionCall } from "../shared/extensions";
 import type { Skill } from "../shared/skills";
 import type { McpToolInfo, ToolSettings } from "../shared/tools";
@@ -141,6 +141,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private contextTimer?: ReturnType<typeof setTimeout>;
   private skills?: Skill[];
   private extensions?: { specs: AgentExtensionSpec[]; json: string; run: (call: ExtensionCall) => Promise<unknown> };
+  private handlers = new Map<string, Set<(message: ServerToClient) => void>>();
 
   constructor(
     private settings: AgentSettings,
@@ -178,8 +179,12 @@ export class AgentConnection extends EventTarget implements AgentLink {
         this.changed();
       } else if (message.type === "extension_call") {
         void this.runExtension(message.callId, message.call);
-      } else {
+      } else if (message.type === "error") {
         this.dispatchEvent(new CustomEvent("error", { detail: message.message }));
+      } else {
+        // Types features add to ServerMessages; `never` here until one does.
+        const other = message as ServerToClient;
+        for (const handler of this.handlers.get(other.type) ?? []) handler(other);
       }
     };
     ws.onclose = () => {
@@ -235,6 +240,22 @@ export class AgentConnection extends EventTarget implements AgentLink {
     } catch (e) {
       this.send({ type: "extension_result", callId, ok: false, error: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  /**
+   * Handles a message type a feature declared (see ServerMessages in
+   * shared/protocol.ts). Returns a function that removes the handler.
+   */
+  on<K extends keyof ServerMessages>(type: K, handler: (message: ServerMessage<K>) => void): () => void {
+    const set = this.handlers.get(type) ?? new Set();
+    this.handlers.set(type, set);
+    set.add(handler as (message: ServerToClient) => void);
+    return () => set.delete(handler as (message: ServerToClient) => void);
+  }
+
+  /** Sends any message, including the types features declare (see ClientMessages). */
+  sendMessage(message: ClientToServer) {
+    this.send(message);
   }
 
   abort() {

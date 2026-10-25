@@ -10,7 +10,7 @@
 
 | Boundary | Control |
 |---|---|
-| Browser ↔ Worker API | `EDITOR_TOKEN` bearer token on every `/api/*` route except `/api/health` and `/api/reports`. Cross-origin calls only from `ALLOWED_ORIGINS`. |
+| Browser ↔ Worker API | `EDITOR_TOKEN` bearer token on every `/api/*` route except `/api/health` and `/api/reports` (the routes marked `public` in `worker/routes/`); unknown paths answer 401 without it. Cross-origin calls only from `ALLOWED_ORIGINS`. |
 | Worker ↔ model providers | Keys are Worker secrets; the browser never sees them. Only the post and conversation are sent. |
 | Page ↔ preview iframe | The preview is the user's own `hugo server` (or a site they configured), shown cross-origin; it can't reach the editor's DOM or storage. |
 | Model output ↔ the post | The agent can only *propose* find/replace edits; the user accepts each one, and nothing is written to disk until they save. Model text is rendered as text, never as HTML. |

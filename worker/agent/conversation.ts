@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createRegistry, Harness, type Conversation, type Extension, type Registry, type Wake } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
-import type { ClientToServer, ModelRef, PostContext, ServerToClient, SiteContext } from "../../src/shared/protocol";
+import type { ClientMessages, ClientToServer, ModelRef, PostContext, ServerToClient, SiteContext } from "../../src/shared/protocol";
 import type { ExtensionCall, ExtensionCallResults } from "../../src/shared/extensions";
 import { ExtensionBridge } from "./extension-bridge";
 import { mergeSkills, type Skill } from "../../src/shared/skills";
@@ -15,7 +15,22 @@ import { projectView } from "./view";
 
 const HEARTBEAT_MS = 60_000;
 
-type Contexts = { post: PostContext; site: SiteContext };
+export type Contexts = { post: PostContext; site: SiteContext };
+
+/** Message types every conversation handles itself. */
+const CORE_MESSAGES = new Set<string>(["post", "site", "skills", "prompt", "abort", "reset", "extensions", "extension_result"]);
+
+/**
+ * What one kind of assistant is: the context it takes, the Pi extensions
+ * (tools and prompt sections) it gets, and handlers for any extra message
+ * types a feature declares (see ClientMessages). One file per profile in
+ * worker/agent/profiles.
+ */
+export interface Profile<K extends keyof Contexts> {
+  kind: K;
+  extensions(self: ConversationObject<K>, env: Env): Extension[];
+  messages?: { [T in keyof ClientMessages]?: (self: ConversationObject<K>, message: Extract<ClientToServer, { type: T }>, ws: WebSocket) => Promise<void> | void };
+}
 
 /**
  * One durable agent conversation, shared by the per-post and the site-wide
@@ -24,8 +39,8 @@ type Contexts = { post: PostContext; site: SiteContext };
  * after each commit. Edits go back to the editor as proposals; the editor
  * writes files.
  *
- * Subclasses pick which context message they accept and which extensions
- * (tools and prompt sections) the agent gets.
+ * A Profile picks which context message it accepts, which extensions (tools
+ * and prompt sections) the agent gets, and any extra messages it handles.
  */
 export abstract class ConversationObject<K extends keyof Contexts> extends DurableObject<Env> {
   protected harness!: Harness;
@@ -45,8 +60,11 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
   /** Calls waiting on an editor extension, by call id. */
   private calls = new Map<string, { ws: WebSocket; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
-  constructor(ctx: DurableObjectState, env: Env, private readonly kind: K, extensions: (self: ConversationObject<K>) => Extension[]) {
+  private readonly kind: K;
+
+  constructor(ctx: DurableObjectState, env: Env, private readonly profile: Profile<K>) {
     super(ctx, env);
+    const kind = (this.kind = profile.kind);
     this.database = new DurableObjectSqliteDatabase(ctx.storage);
     void ctx.blockConcurrencyWhile(async () => {
       // A fallback alarm before anything can throw, so a failed open is retried.
@@ -61,7 +79,7 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       if (skills) this.skills = JSON.parse(skills.value);
 
       const registry = (this.registry = createRegistry());
-      const builtin = extensions(this);
+      const builtin = profile.extensions(this, env);
       for (const extension of builtin) registry.install(extension);
       await this.refreshTools();
       // Editor extensions, installed again from their last manifest so pending calls to their tools can resume.
@@ -90,13 +108,18 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
     });
   }
 
+  /** The latest context the editor sent (the post, or the site). */
+  context(): Contexts[K] | undefined {
+    return this.current;
+  }
+
   /** Skills sent with a `skills` message, then any that came with the context (older editors, extensions). */
-  protected allSkills(): Skill[] {
+  allSkills(): Skill[] {
     return mergeSkills(this.skills, this.current?.skills);
   }
 
-  /** The SiteIndex for the site in the current context. */
-  protected index(siteId: string | undefined) {
+  /** The SiteIndex for a site (by default the one in the current context). */
+  index(siteId: string | undefined = this.current?.siteId) {
     return siteId ? this.env.SITE_INDEX.get(this.env.SITE_INDEX.idFromName(siteId)) : undefined;
   }
 
@@ -117,6 +140,11 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
       return this.send(ws, { type: "error", message: "Malformed message" });
     }
     try {
+      if (!CORE_MESSAGES.has(message.type)) {
+        const handler = this.profile.messages?.[message.type] as ((self: this, message: ClientToServer, ws: WebSocket) => Promise<void> | void) | undefined;
+        if (!handler) return this.send(ws, { type: "error", message: `Unknown message type ${JSON.stringify(message.type)}.` });
+        return await handler(this, message, ws);
+      }
       switch (message.type) {
         case "post":
         case "site":
@@ -253,7 +281,8 @@ export abstract class ConversationObject<K extends keyof Contexts> extends Durab
     }, 80);
   }
 
-  private send(ws: WebSocket, message: ServerToClient) {
+  /** Sends a message to one editor; profiles use it to answer their own message types. */
+  send(ws: WebSocket, message: ServerToClient) {
     ws.send(JSON.stringify(message));
   }
 }
