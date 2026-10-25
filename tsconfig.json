@@ -12,5 +12,7 @@
     "useDefineForClassFields": false,
     "isolatedModules": true
   },
-  "include": ["src", "worker", "tests"]
+  "include": ["src", "worker", "tests"],
+  // The service worker has its own config: the WebWorker and DOM libs clash.
+  "exclude": ["src/sw"]
 }

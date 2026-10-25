@@ -10,6 +10,7 @@ import { createSampleSite } from "../lib/sample-site";
 import { slugify } from "../lib/slug";
 import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentSettings } from "../lib/agent-client";
 import { syncSiteIndex } from "../lib/indexer";
+import { listenForLaunches, persistStorage, registerServiceWorker, type Launch } from "../lib/pwa";
 import type { Edit, ModelInfo, PostContext } from "../shared/protocol";
 import { controls } from "./shared";
 import type { MdEditor } from "./md-editor";
@@ -41,6 +42,17 @@ export class MdApp extends LitElement {
       .top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
       .top h1 { font-size: 14px; margin: 0 8px 0 0; }
       .top .spacer { flex: 1; }
+      /* Installed with window controls overlay: the top bar becomes the title bar. */
+      @media (display-mode: window-controls-overlay) {
+        .top {
+          app-region: drag;
+          min-height: env(titlebar-area-height, 33px);
+          padding-block: 0;
+          padding-left: calc(env(titlebar-area-x, 0px) + 12px);
+          padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+        }
+        .top > :not(h1, .spacer) { app-region: no-drag; }
+      }
       .body { display: grid; grid-template-columns: 300px minmax(0, 1fr) var(--preview-width, minmax(0, 1fr)); min-height: 0; }
       .body.no-preview { grid-template-columns: 300px minmax(0, 1fr); }
       .body.solo { grid-template-columns: minmax(0, 1fr); }
@@ -109,6 +121,14 @@ export class MdApp extends LitElement {
   @state() private agentError = "";
   @state() private connection?: AgentConnection;
   @state() private indexStatus = "";
+  /** Set when a new version of the app is installed and waiting; calling it switches and reloads. */
+  @state() private applyUpdate?: () => void;
+  /** A file the app was opened with that isn't inside any added site. */
+  @state() private orphanFile?: FileSystemFileHandle;
+  /** Text shared to the app, waiting to become a new post. */
+  @state() private shared?: { title: string; text: string };
+  /** A launch to act on once the site it needs has loaded. */
+  private pendingLaunch?: { path?: string; share?: Launch["share"]; action?: string };
   private siteInstructions = "";
 
   @query("md-editor") private editor?: MdEditor;
@@ -133,7 +153,9 @@ export class MdApp extends LitElement {
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
     window.addEventListener("keydown", this.onKeydown);
+    void registerServiceWorker((apply) => (this.applyUpdate = apply));
     this.sites = await loadSites();
+    listenForLaunches((launch) => void this.onLaunch(launch));
     const last = this.sites.find((s) => s.id === localStorage.getItem(LAST_SITE_KEY)) ?? this.sites[0];
     if (last) await this.selectSite(last, false);
   }
@@ -166,10 +188,10 @@ export class MdApp extends LitElement {
 
   // ---- Sites ---------------------------------------------------------------
 
-  private async addSite() {
+  private async addSite(startIn?: FileSystemHandle) {
     let handle: FileSystemDirectoryHandle;
     try {
-      handle = await window.showDirectoryPicker({ id: "hugo-site", mode: "readwrite" });
+      handle = await window.showDirectoryPicker({ id: "hugo-site", mode: "readwrite", startIn });
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") this.error = String(e);
       return;
@@ -198,6 +220,7 @@ export class MdApp extends LitElement {
     };
     this.sites = [...this.sites, site];
     await saveSites(this.sites);
+    void persistStorage();
     await this.selectSite(site);
   }
 
@@ -247,6 +270,60 @@ export class MdApp extends LitElement {
     } finally {
       if (generation === this.siteGeneration) this.loading = false;
     }
+    if (generation === this.siteGeneration) await this.runPendingLaunch();
+  }
+
+  // ---- Launches (installed app) ---------------------------------------------
+
+  /** The app was opened with a file, sent shared text, or started from a shortcut. */
+  private async onLaunch(launch: Launch) {
+    if (launch.files.length) {
+      const file = launch.files[0];
+      for (const site of this.sites) {
+        const parts = await site.handle.resolve(file);
+        if (!parts) continue;
+        this.orphanFile = undefined;
+        this.pendingLaunch = { path: parts.join("/") };
+        if (site !== this.site) await this.selectSite(site, false);
+        else await this.runPendingLaunch();
+        return;
+      }
+      this.orphanFile = file;
+      return;
+    }
+    this.pendingLaunch = { share: launch.share, action: launch.action };
+    await this.runPendingLaunch();
+  }
+
+  /** Acts on a launch once a site is loaded and readable; until then it waits (e.g. for "Allow access"). */
+  private async runPendingLaunch() {
+    const launch = this.pendingLaunch;
+    const { site, config } = this;
+    if (!launch || !site || !config || this.loading || this.needsPermission) return;
+    this.pendingLaunch = undefined;
+    if (launch.path) {
+      if (!launch.path.startsWith(`${config.contentDir}/`)) {
+        this.error = `${launch.path} isn't a post: it's outside ${config.contentDir}/`;
+        return;
+      }
+      const summary = this.posts.find((p) => p.path === launch.path) ?? ({ path: launch.path } as PostSummary);
+      await this.openPost(summary);
+    } else if (launch.share || launch.action === "new-post") {
+      this.shared = launch.share;
+      this.newPostDialog?.showModal();
+    }
+  }
+
+  private async addOrphanSite() {
+    const file = this.orphanFile;
+    if (!file) return;
+    await this.addSite(file);
+    await this.onLaunch({ files: [file] });
+  }
+
+  private async installUpdate() {
+    if (this.dirty) await this.save();
+    if (!this.dirty) this.applyUpdate?.();
   }
 
   private async updateSite(patch: Partial<SiteRecord>) {
@@ -376,6 +453,7 @@ export class MdApp extends LitElement {
     const section = String(form.get("section") ?? "");
     if (!title || !(await this.confirmDiscard())) return;
     const { path, post } = newPostFromTemplate(this.posts, this.config, section, title);
+    if (this.shared?.text) post.body = `\n${this.shared.text}\n`;
     if (await exists(this.site.handle, path)) {
       this.error = `${path} already exists`;
       return;
@@ -567,6 +645,7 @@ export class MdApp extends LitElement {
         : nothing}
       ${this.supportsPicker ? html`<button @click=${this.addSite}>Add site folder…</button>` : nothing}
       <span class="spacer"></span>
+      ${this.applyUpdate ? html`<button @click=${this.installUpdate} title="A new version of the editor is ready">Update</button>` : nothing}
       ${this.open ? html`<button @click=${this.togglePreview} aria-pressed=${this.showPreview}>Side panel</button>` : nothing}
       <button class="primary" ?disabled=${!this.dirty} @click=${this.save} title="Save (Ctrl/⌘+S)">Save</button>
     </div>`;
@@ -595,6 +674,15 @@ export class MdApp extends LitElement {
     return html`<div class="empty">
       <h2>${this.loading ? "Loading posts…" : "Pick a post"}</h2>
       ${this.loading ? nothing : html`<p>Choose a post on the left, or start a new one.</p>`}
+    </div>`;
+  }
+
+  private renderOrphan() {
+    if (!this.orphanFile) return nothing;
+    return html`<div class="banner" role="alert">
+      <span><code>${this.orphanFile.name}</code> isn't in a site you've added.</span>
+      ${this.supportsPicker ? html`<button @click=${this.addOrphanSite}>Add its site folder…</button>` : nothing}
+      <button class="ghost" @click=${() => (this.orphanFile = undefined)}>Dismiss</button>
     </div>`;
   }
 
@@ -632,9 +720,10 @@ export class MdApp extends LitElement {
   }
 
   private renderEditor() {
-    if (!this.open) return html`<main>${this.renderEmpty()}</main>`;
+    if (!this.open) return html`<main>${this.renderOrphan()}${this.renderEmpty()}</main>`;
     const { post, summary } = this.open;
     return html`<main>
+      ${this.renderOrphan()}
       ${this.changedOnDisk
         ? html`<div class="banner" role="alert">
             This file changed on disk while you were editing.
@@ -668,15 +757,22 @@ export class MdApp extends LitElement {
   private renderDialogs() {
     const secs = sections(this.posts);
     return html`
-      <dialog id="new-post" @close=${(e: Event) => ((e.target as HTMLDialogElement).querySelector("form") as HTMLFormElement)?.reset()}>
+      <dialog
+        id="new-post"
+        @close=${(e: Event) => {
+          ((e.target as HTMLDialogElement).querySelector("form") as HTMLFormElement)?.reset();
+          this.shared = undefined;
+        }}
+      >
         <form @submit=${this.createPost}>
           <h3>New post</h3>
-          <label>Title <input name="title" required autofocus /></label>
+          <label>Title <input name="title" required autofocus .value=${this.shared?.title ?? ""} /></label>
           ${secs.length > 1
             ? html`<label>Section
                 <select name="section">${secs.map((s) => html`<option value=${s}>${s || "(root)"}</option>`)}</select>
               </label>`
             : html`<input type="hidden" name="section" value=${secs[0] ?? ""} />`}
+          ${this.shared?.text ? html`<p class="muted">Starts with the shared text: <q>${this.shared.text.slice(0, 120)}${this.shared.text.length > 120 ? "…" : ""}</q></p>` : nothing}
           <p class="muted">Front matter is copied from the most recent post in that section. The post starts as a draft.</p>
           <div class="actions">
             <button type="button" @click=${() => this.newPostDialog?.close()}>Cancel</button>
@@ -750,7 +846,7 @@ export class MdApp extends LitElement {
       ${this.renderTop()}
       <div class="body ${!ready ? "solo" : preview ? "" : "no-preview"}">
         ${ready ? this.renderSidebar() : nothing}
-        ${ready ? this.renderEditor() : html`<main>${this.renderEmpty()}</main>`}
+        ${ready ? this.renderEditor() : html`<main>${this.renderOrphan()}${this.renderEmpty()}</main>`}
         ${preview ? this.renderSide() : nothing}
       </div>
       ${this.renderStatus()} ${this.renderDialogs()}
