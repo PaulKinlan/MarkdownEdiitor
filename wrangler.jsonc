@@ -3,10 +3,20 @@
   "name": "markdown-editor",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // process.env is populated from secrets, which is where pi-ai providers read their API keys.
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
-  }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "AGENT_SESSION", "class_name": "AgentSession" },
+      { "name": "SITE_INDEX", "class_name": "SiteIndex" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentSession", "SiteIndex"] }]
 }

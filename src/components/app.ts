@@ -3,17 +3,21 @@ import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
 import { readHugoConfig, listShortcodes, type HugoConfig } from "../lib/hugo";
-import { getFile, writeFile, exists } from "../lib/fs";
+import { getFile, writeFile, exists, readText } from "../lib/fs";
 import { listPosts, newPostFromTemplate, sections, summarise, sortPosts, type PostSummary } from "../lib/posts";
 import { findExistingSite, hasPermission, loadSites, requestPermission, saveSites, type SiteRecord } from "../lib/sites";
 import { createSampleSite } from "../lib/sample-site";
 import { slugify } from "../lib/slug";
+import { AgentConnection, fetchAgentConfig, loadAgentSettings, saveAgentSettings, sessionId, type AgentSettings } from "../lib/agent-client";
+import { syncSiteIndex } from "../lib/indexer";
+import type { Edit, ModelInfo, PostContext } from "../shared/protocol";
 import { controls } from "./shared";
 import type { MdEditor } from "./md-editor";
 import type { PreviewPane } from "./preview-pane";
 import "./md-editor";
 import "./frontmatter-form";
 import "./preview-pane";
+import "./agent-panel";
 
 interface OpenPost {
   summary: PostSummary;
@@ -25,6 +29,8 @@ interface OpenPost {
 
 const LAST_SITE_KEY = "md-editor:last-site";
 const PREVIEW_KEY = "md-editor:preview-open";
+const TAB_KEY = "md-editor:side-tab";
+const SITE_RULE_FILES = ["CLAUDE.md", "AGENTS.md"];
 
 @customElement("md-app")
 export class MdApp extends LitElement {
@@ -54,7 +60,12 @@ export class MdApp extends LitElement {
       .toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
       .toolbar .path { font-family: var(--mono); font-size: 12px; color: var(--fg-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       md-editor { flex: 1; }
-      preview-pane { border-left: 1px solid var(--border); }
+      .side { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+      .side > preview-pane, .side > agent-panel { flex: 1; }
+      .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-2); }
+      .tabs button { all: unset; cursor: pointer; padding: 6px 14px; font-size: 13px; color: var(--fg-2); border-bottom: 2px solid transparent; }
+      .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+      .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
       .status { display: flex; gap: 16px; padding: 3px 12px; font-size: 12px; color: var(--fg-2); border-top: 1px solid var(--border); background: var(--bg-2); }
       .status .dirty { color: var(--warn); }
       .status .error { color: var(--danger); }
@@ -71,7 +82,7 @@ export class MdApp extends LitElement {
       @media (max-width: 900px) {
         .body, .body.no-preview, .body.solo { grid-template-columns: 1fr; }
         aside { max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); }
-        preview-pane { display: none; }
+        .side { display: none; }
       }
     `,
   ];
@@ -92,6 +103,13 @@ export class MdApp extends LitElement {
   @state() private error = "";
   @state() private changedOnDisk = false;
   @state() private showPreview = localStorage.getItem(PREVIEW_KEY) !== "false";
+  @state() private sideTab: "preview" | "assistant" = localStorage.getItem(TAB_KEY) === "assistant" ? "assistant" : "preview";
+  @state() private agentSettings: AgentSettings = loadAgentSettings();
+  @state() private models: ModelInfo[] = [];
+  @state() private agentError = "";
+  @state() private connection?: AgentConnection;
+  @state() private indexStatus = "";
+  private siteInstructions = "";
 
   @query("md-editor") private editor?: MdEditor;
   @query("preview-pane") private preview?: PreviewPane;
@@ -189,6 +207,8 @@ export class MdApp extends LitElement {
     this.open = undefined;
     this.postGeneration++;
     this.sectionFilter = "*";
+    this.connection?.close();
+    this.connection = undefined;
     this.text = "";
     this.posts = [];
     this.config = undefined;
@@ -218,6 +238,10 @@ export class MdApp extends LitElement {
       this.config = config;
       this.posts = posts;
       this.shortcodes = shortcodes;
+      const rules = await Promise.all(SITE_RULE_FILES.map((f) => readText(site.handle, f)));
+      if (generation !== this.siteGeneration) return;
+      this.siteInstructions = rules.filter(Boolean).join("\n\n");
+      void this.connectAgentServer();
     } catch (e) {
       if (generation === this.siteGeneration) this.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -270,9 +294,11 @@ export class MdApp extends LitElement {
       // The file may have changed since the list was built: refresh its title, URL and draft state.
       const summary = config ? summarise(requested.path, config, post, file.lastModified) : requested;
       this.posts = sortPosts(this.posts.map((p) => (p.path === summary.path ? summary : p)));
+      const switching = this.open?.summary.path !== summary.path;
       this.open = { summary, post, savedText: text, lastModified: file.lastModified };
       this.loadCount++;
       this.text = text;
+      if (switching || !this.connection) this.openConnection();
       this.changedOnDisk = false;
       this.error = "";
     } catch (e) {
@@ -409,6 +435,95 @@ export class MdApp extends LitElement {
     }
   };
 
+  // ---- Assistant -------------------------------------------------------------
+
+  /** Loads the model list and brings the site's search index up to date. */
+  private async connectAgentServer() {
+    try {
+      const config = await fetchAgentConfig(this.agentSettings);
+      this.models = config.models;
+      this.agentError = config.models.length ? "" : "The agent server has no model API keys configured.";
+      const saved = this.agentSettings.model;
+      if (!saved || !this.models.some((m) => `${m.provider}/${m.modelId}` === saved)) {
+        const first = this.models.find((m) => m.provider === "anthropic") ?? this.models[0];
+        if (first) this.setModel(`${first.provider}/${first.modelId}`);
+      }
+    } catch (e) {
+      this.models = [];
+      this.agentError = `Agent server unavailable: ${e instanceof Error ? e.message : String(e)}`;
+      return;
+    }
+    if (!this.site) return;
+    try {
+      this.indexStatus = "Indexing posts for search…";
+      const uploaded = await syncSiteIndex(this.agentSettings, this.site.id, this.site.handle, this.posts);
+      this.indexStatus = uploaded ? `Indexed ${uploaded} post${uploaded === 1 ? "" : "s"}` : "";
+      if (uploaded) setTimeout(() => (this.indexStatus = ""), 4000);
+    } catch (e) {
+      this.indexStatus = `Search index not updated: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  private setModel(model: string) {
+    this.agentSettings = { ...this.agentSettings, model };
+    saveAgentSettings(this.agentSettings);
+  }
+
+  private updateAgentSettings(patch: Partial<AgentSettings>) {
+    this.agentSettings = { ...this.agentSettings, ...patch };
+    saveAgentSettings(this.agentSettings);
+    this.openConnection();
+    void this.connectAgentServer();
+  }
+
+  private openConnection() {
+    this.connection?.close();
+    this.connection = undefined;
+    if (!this.open || !this.site) return;
+    this.connection = new AgentConnection(this.agentSettings, sessionId(this.site.id, this.open.summary.path));
+    this.connection.updatePost(this.postContext()!);
+  }
+
+  private postContext(): PostContext | undefined {
+    if (!this.open || !this.site) return undefined;
+    return {
+      siteId: this.site.id,
+      siteName: this.site.name,
+      siteInstructions: this.siteInstructions,
+      path: this.open.summary.path,
+      url: this.open.summary.url,
+      text: this.text,
+    };
+  }
+
+  /** Applies an accepted suggestion. Body edits go through the editor so they can be undone. */
+  private onApplyEdit(e: CustomEvent<{ edit: Edit; done: (ok: boolean) => void }>) {
+    if (!this.open) return e.detail.done(false);
+    const { find, replace } = e.detail.edit;
+    const at = this.text.indexOf(find);
+    if (at === -1 || this.text.indexOf(find, at + 1) !== -1) return e.detail.done(false);
+    const bodyStart = this.text.length - this.open.post.body.length;
+    if (at >= bodyStart && this.editor?.replaceUnique(find, replace)) return e.detail.done(true);
+    const next = this.text.slice(0, at) + replace + this.text.slice(at + find.length);
+    try {
+      this.open.post = Post.parse(next);
+      this.text = next;
+      this.requestUpdate();
+      e.detail.done(true);
+    } catch {
+      e.detail.done(false);
+    }
+  }
+
+  private setSideTab(tab: "preview" | "assistant") {
+    this.sideTab = tab;
+    localStorage.setItem(TAB_KEY, tab);
+  }
+
+  updated(changed: Map<string, unknown>) {
+    if (changed.has("text") && this.connection && this.open) this.connection.updatePost(this.postContext()!);
+  }
+
   // ---- Rendering -------------------------------------------------------------
 
   private get visiblePosts(): PostSummary[] {
@@ -435,7 +550,7 @@ export class MdApp extends LitElement {
         : nothing}
       ${this.supportsPicker ? html`<button @click=${this.addSite}>Add site folder…</button>` : nothing}
       <span class="spacer"></span>
-      ${this.open ? html`<button @click=${this.togglePreview} aria-pressed=${this.showPreview}>Preview</button>` : nothing}
+      ${this.open ? html`<button @click=${this.togglePreview} aria-pressed=${this.showPreview}>Side panel</button>` : nothing}
       <button class="primary" ?disabled=${!this.dirty} @click=${this.save} title="Save (Ctrl/⌘+S)">Save</button>
     </div>`;
   }
@@ -560,6 +675,10 @@ export class MdApp extends LitElement {
               <label>Preview server
                 <input .value=${this.site.previewOrigin} @change=${(e: Event) => this.updateSite({ previewOrigin: (e.target as HTMLInputElement).value.replace(/\/$/, "") })} />
               </label>
+              <h4>Assistant</h4>
+              <label>Agent server <input placeholder="This site" .value=${this.agentSettings.server} @change=${(e: Event) => this.updateAgentSettings({ server: (e.target as HTMLInputElement).value.trim().replace(/\/$/, "") })} /></label>
+              <label>Access token <input type="password" autocomplete="off" .value=${this.agentSettings.token} @change=${(e: Event) => this.updateAgentSettings({ token: (e.target as HTMLInputElement).value.trim() })} /></label>
+              <p class="muted">Writing rules sent to the assistant: ${this.siteInstructions ? SITE_RULE_FILES.join(" / ") + " from the site folder" : html`none (add a <code>CLAUDE.md</code> or <code>AGENTS.md</code> to the site root)`}.</p>
               <p class="muted">Folder: <code>${this.site.handle.name}</code>${this.config ? html` · config: <code>${this.config.file}</code> · content: <code>${this.config.contentDir}/</code>` : nothing}</p>
               <div class="actions">
                 <button type="button" class="left" @click=${this.removeSite}>Remove site</button>
@@ -572,6 +691,30 @@ export class MdApp extends LitElement {
     `;
   }
 
+  private renderSide() {
+    return html`<section class="side">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected=${this.sideTab === "preview"} @click=${() => this.setSideTab("preview")}>Preview</button>
+        <button role="tab" aria-selected=${this.sideTab === "assistant"} @click=${() => this.setSideTab("assistant")}>Assistant</button>
+      </div>
+      ${this.sideTab === "preview"
+        ? html`<preview-pane
+            .origin=${this.site!.previewOrigin}
+            .path=${this.open!.summary.url}
+            .draft=${this.open!.summary.draft}
+            @origin-change=${(e: CustomEvent<{ origin: string }>) => this.updateSite({ previewOrigin: e.detail.origin })}
+          ></preview-pane>`
+        : html`<agent-panel
+            .connection=${this.connection}
+            .models=${this.models}
+            .model=${this.agentSettings.model ?? ""}
+            .configError=${this.agentError}
+            @model-change=${(e: CustomEvent<string>) => this.setModel(e.detail)}
+            @apply-edit=${this.onApplyEdit}
+          ></agent-panel>`}
+    </section>`;
+  }
+
   private renderStatus() {
     const words = this.open ? (this.open.post.body.match(/[\p{L}\p{N}’']+/gu) ?? []).length : 0;
     return html`<div class="status" role="status">
@@ -579,6 +722,7 @@ export class MdApp extends LitElement {
           <span>${words.toLocaleString()} words · ${Math.max(1, Math.round(words / 230))} min read</span>` : nothing}
       ${this.error ? html`<span class="error">${this.error}</span>` : nothing}
       ${this.message ? html`<span>${this.message}</span>` : nothing}
+      ${this.indexStatus ? html`<span>${this.indexStatus}</span>` : nothing}
     </div>`;
   }
 
@@ -590,14 +734,7 @@ export class MdApp extends LitElement {
       <div class="body ${!ready ? "solo" : preview ? "" : "no-preview"}">
         ${ready ? this.renderSidebar() : nothing}
         ${ready ? this.renderEditor() : html`<main>${this.renderEmpty()}</main>`}
-        ${preview
-          ? html`<preview-pane
-              .origin=${this.site!.previewOrigin}
-              .path=${this.open!.summary.url}
-              .draft=${this.open!.summary.draft}
-              @origin-change=${(e: CustomEvent<{ origin: string }>) => this.updateSite({ previewOrigin: e.detail.origin })}
-            ></preview-pane>`
-          : nothing}
+        ${preview ? this.renderSide() : nothing}
       </div>
       ${this.renderStatus()} ${this.renderDialogs()}
     `;

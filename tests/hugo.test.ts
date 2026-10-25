@@ -54,3 +54,20 @@ describe("newPostFromTemplate", () => {
     );
   });
 });
+
+import { applyEdit, diffWords } from "../src/lib/diff";
+
+describe("edits", () => {
+  it("diffs by word", () => {
+    expect(diffWords("a very good post", "a good post")).toEqual([
+      { type: "same", text: "a " },
+      { type: "del", text: "very " },
+      { type: "same", text: "good post" },
+    ]);
+  });
+  it("applies only unique matches", () => {
+    expect(applyEdit("one two one", "two", "2")).toBe("one 2 one");
+    expect(applyEdit("one two one", "one", "1")).toBeUndefined();
+    expect(applyEdit("one", "three", "3")).toBeUndefined();
+  });
+});
