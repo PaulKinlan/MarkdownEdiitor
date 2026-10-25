@@ -1,0 +1,105 @@
+name: Deploy
+
+# main deploys the production Worker. Every other branch deploys its own
+# preview Worker (markdown-editor-<branch>), and the URL is posted on the PR.
+# Previews are separate Workers rather than preview URLs because preview URLs
+# are not available for Workers that use Durable Objects, which the agent
+# backend does. A preview is deleted when its PR is closed.
+#
+# Needs repository secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
+# CLOUDFLARE_ACCOUNT_ID. Without them, the workflow still builds and tests.
+
+on:
+  push:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: deploy-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  WORKER: markdown-editor
+
+jobs:
+  deploy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Work out the Worker name
+        id: target
+        env:
+          BRANCH: ${{ github.ref_name }}
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          if [ "$BRANCH" = "main" ]; then
+            echo "name=$WORKER" >> "$GITHUB_OUTPUT"
+          else
+            alias=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
+            echo "name=$WORKER-$alias" >> "$GITHUB_OUTPUT"
+          fi
+          echo "enabled=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set, so nothing was deployed."
+          fi
+
+      - name: Deploy
+        id: deploy
+        if: steps.target.outputs.enabled == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy --name "${{ steps.target.outputs.name }}" | tee deploy.log
+          url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post the preview URL on the PR
+        if: steps.deploy.outputs.url != '' && github.ref_name != 'main'
+        uses: actions/github-script@v7
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          WORKER_NAME: ${{ steps.target.outputs.name }}
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              ...context.repo, state: "open", head: `${context.repo.owner}:${context.ref.replace("refs/heads/", "")}`,
+            });
+            const marker = "<!-- preview-deploy -->";
+            const body = `${marker}\n**Preview:** ${process.env.URL}\n\nWorker \`${process.env.WORKER_NAME}\` at ${context.sha.slice(0, 7)}. It is deleted when this PR closes.`;
+            for (const pr of prs) {
+              const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number });
+              const existing = comments.find((c) => c.body?.includes(marker));
+              if (existing) await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+              else await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });
+            }
+
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the preview Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then exit 0; fi
+          alias=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//')
+          npx -y wrangler@4 delete --name "$WORKER-$alias" --force || echo "Nothing to delete"
