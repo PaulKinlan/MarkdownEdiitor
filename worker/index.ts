@@ -4,6 +4,7 @@ import { createConfiguredModels, listModels } from "./agent/models";
 
 export { AgentSession } from "./agent/session";
 export { SiteIndex } from "./agent/site-index";
+export { ExtensionStore } from "./extension-store";
 
 // The editor runs in the browser against local folders. The Worker serves the
 // built app and the agent API: one AgentSession Durable Object per post
@@ -53,6 +54,23 @@ async function route(request: Request, url: URL, env: Env): Promise<Response> {
       return Response.json({ count: await index.upsert(posts) });
     }
 
+    // /api/extensions and /api/extensions/:id: the author's extension library.
+    m = url.pathname.match(/^\/api\/extensions(?:\/([a-z][a-z0-9-]{0,62}))?$/);
+    if (m) {
+      const store = env.EXTENSION_STORE.get(env.EXTENSION_STORE.idFromName("library"));
+      try {
+        if (!m[1] && request.method === "GET") return Response.json(await store.list());
+        if (m[1] && request.method === "PUT") {
+          const body = (await request.json()) as { source?: unknown; from?: unknown };
+          if (typeof body.source !== "string") return Response.json({ error: "Expected { source }" }, { status: 400 });
+          return Response.json(await store.put(m[1], body.source, typeof body.from === "string" ? body.from : undefined));
+        }
+        if (m[1] && request.method === "DELETE") return Response.json({ removed: await store.remove(m[1]) });
+      } catch (e) {
+        return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+      }
+    }
+
     return Response.json({ error: "Not found" }, { status: 404 });
 }
 
@@ -68,7 +86,7 @@ function corsHeaders(request: Request, env: Env): Record<string, string> | undef
   if (!allowed.includes(origin) && !allowed.includes("*")) return undefined;
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",

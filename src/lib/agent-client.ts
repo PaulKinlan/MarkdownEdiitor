@@ -1,4 +1,5 @@
 import type { ClientToServer, ModelInfo, PostContext, ServerToClient } from "../shared/protocol";
+import type { AgentExtensionSpec, ExtensionCall } from "../shared/extensions";
 
 const SETTINGS_KEY = "md-editor:agent-settings";
 
@@ -84,6 +85,8 @@ export interface AgentLink extends EventTarget {
   abort(): void;
   reset(): void;
   close(): void;
+  /** Editor extensions the agent may call; links without tools (the on-device model) leave these out. */
+  setExtensions?(specs: AgentExtensionSpec[], run: (call: ExtensionCall) => Promise<unknown>): void;
 }
 
 /**
@@ -98,6 +101,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
   private closed = false;
   private post?: PostContext;
   private postTimer?: ReturnType<typeof setTimeout>;
+  private extensions?: { specs: AgentExtensionSpec[]; json: string; run: (call: ExtensionCall) => Promise<unknown> };
 
   constructor(private settings: AgentSettings, readonly id: string) {
     super();
@@ -115,6 +119,7 @@ export class AgentConnection extends EventTarget implements AgentLink {
       this.retry = 0;
       this.status = "open";
       if (this.post) this.send({ type: "post", post: this.post });
+      if (this.extensions) this.send({ type: "extensions", extensions: this.extensions.specs });
       this.changed();
     };
     ws.onmessage = (e) => {
@@ -122,6 +127,8 @@ export class AgentConnection extends EventTarget implements AgentLink {
       if (message.type === "view") {
         this.view = message;
         this.changed();
+      } else if (message.type === "extension_call") {
+        void this.runExtension(message.callId, message.call);
       } else {
         this.dispatchEvent(new CustomEvent("error", { detail: message.message }));
       }
@@ -147,6 +154,24 @@ export class AgentConnection extends EventTarget implements AgentLink {
     clearTimeout(this.postTimer);
     if (this.post) this.send({ type: "post", post: this.post });
     this.send({ type: "prompt", text, model, label, requestId: crypto.randomUUID() });
+  }
+
+  /** Sends the enabled extensions when they change, and answers the session's calls into them with `run`. */
+  setExtensions(specs: AgentExtensionSpec[], run: (call: ExtensionCall) => Promise<unknown>) {
+    const json = JSON.stringify(specs);
+    const changed = json !== this.extensions?.json;
+    this.extensions = { specs, json, run };
+    if (changed && this.ws?.readyState === WebSocket.OPEN) this.send({ type: "extensions", extensions: specs });
+  }
+
+  private async runExtension(callId: string, call: ExtensionCall) {
+    try {
+      if (!this.extensions) throw new Error("This editor has no extensions running.");
+      const value = await this.extensions.run(call);
+      this.send({ type: "extension_result", callId, ok: true, value });
+    } catch (e) {
+      this.send({ type: "extension_result", callId, ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   abort() {

@@ -39,6 +39,26 @@ For local work, copy `.dev.vars.example` to `.dev.vars` and run `npm run dev:wor
 
 Folder access needs Chrome or Edge. Other browsers can use "Try a sample site", which lives in the browser's private file system.
 
+## Extensions
+
+Extensions add to every part of the editor: commands and shortcuts, toolbar buttons, status bar items, underlines with notes in the text, side panel tabs, and the assistant's tools, skills, quick edits, system prompt and tool-call hooks. They are written like [Pi](https://github.com/badlogic/pi-mono) extensions: one module whose default export gets an `editor` object.
+
+```js
+export const manifest = { id: "word-goal", name: "Word goal", permissions: ["post:read", "ui"] };
+export default function (editor) {
+  const status = editor.ui.status("goal", "");
+  editor.on("post:change", (post) => status.set(`${post.text.slice(post.bodyStart).split(/\s+/).length} / 1,500 words`));
+}
+```
+
+- **Isolated.** Each extension runs in its own Web Worker, with no DOM, folder access or network unless it asks. The editor checks every call against the permissions in its manifest, and a crash stops only that extension.
+- **Agent tools from the browser.** The post's `AgentSession` installs one Pi Durable extension per editor extension (`ext:<id>`). When the model calls one of its tools, or a hook runs, the Durable Object asks the editor over the WebSocket, and the editor asks the worker. Tools work while the editor is open.
+- **Where they come from.** Built in; a site's own `.editor/extensions/<id>.js` (versioned with the blog); or installed from a URL or file in Settings → Extensions. Installed extensions are kept in an `ExtensionStore` Durable Object so every browser gets them. Nothing but the built-ins runs until you approve its permissions, and an update that asks for more waits for approval again.
+- **The assistant can write them.** The built-in Extension builder gives the assistant the full API reference as a `write-extension` skill, and tools to list, read and install extensions. You approve each install.
+- **Built in:** Readability (grade level in the status bar, long sentences underlined, a `readability_report` tool and a "Shorten long sentences" edit) and Data checker (a Claims panel of every number, date, amount and quote, `list_claims` and `read_site_data` tools, a `check-data` skill and a "Check numbers" edit).
+
+The API is in [docs/extensions.md](docs/extensions.md). With `DEMO_MODEL=1`, a prompt like `/tool readability_report {}` makes the faux model call that tool, to try extension tools without keys.
+
 ## Chrome features
 
 These turn on in Chrome when it has them. Without them the editor works as before.
@@ -109,6 +129,10 @@ worker/index.ts          Cloudflare Worker: app assets and /api routes
 worker/agent/session.ts  AgentSession Durable Object (Pi Durable harness per post)
 worker/agent/writing.ts  The writing extension: tools and system prompt sections
 worker/agent/site-index.ts  SiteIndex Durable Object (SQLite FTS5 over past posts)
+worker/agent/extension-bridge.ts  Editor extensions as Pi Durable extensions (tools, sections, hooks forwarded to the editor)
+worker/extension-store.ts  ExtensionStore Durable Object (the author's installed extensions)
+src/extensions/          Extension host (page), runtime (worker), library, loader, built-in extensions
+docs/extensions.md       The extension API (also the assistant's write-extension skill)
 ```
 
 ## Plan

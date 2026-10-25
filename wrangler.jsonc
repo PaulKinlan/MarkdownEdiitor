@@ -15,8 +15,12 @@
   "durable_objects": {
     "bindings": [
       { "name": "AGENT_SESSION", "class_name": "AgentSession" },
-      { "name": "SITE_INDEX", "class_name": "SiteIndex" }
+      { "name": "SITE_INDEX", "class_name": "SiteIndex" },
+      { "name": "EXTENSION_STORE", "class_name": "ExtensionStore" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AgentSession", "SiteIndex"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["AgentSession", "SiteIndex"] },
+    { "tag": "extensions-v1", "new_sqlite_classes": ["ExtensionStore"] }
+  ]
 }

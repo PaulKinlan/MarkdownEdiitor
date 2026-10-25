@@ -70,6 +70,8 @@ export class AgentPanel extends LitElement {
   @property({ attribute: false }) models: ModelInfo[] = [];
   @property() model = "";
   @property() configError = "";
+  /** Quick edits that editor extensions added, shown after the others. */
+  @property({ attribute: false }) extensionActions: EditAction[] = [];
 
   @state() private actions: EditAction[] = [...BUILTIN_ACTIONS, ...loadCustomActions()];
   @state() private error = "";
@@ -264,7 +266,7 @@ export class AgentPanel extends LitElement {
           : html`<button class="ghost" title="Start a new conversation" ?disabled=${!view?.items.length} @click=${() => this.connection?.reset()}>New chat</button>`}
       </div>
       <div class="actions">
-        ${this.actions.map((a) => html`<button ?disabled=${busy || !this.connection} title=${a.prompt} @click=${() => this.send(a.prompt, a.name)}>${a.name}</button>`)}
+        ${[...this.actions, ...this.extensionActions].map((a) => html`<button ?disabled=${busy || !this.connection} title=${a.prompt} @click=${() => this.send(a.prompt, a.name)}>${a.name}</button>`)}
         <button class="ghost" @click=${() => this.dialog?.showModal()}>${icon("plus")} Your edits</button>
       </div>
       <div class="log" aria-live="polite">

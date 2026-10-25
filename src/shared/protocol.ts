@@ -1,5 +1,7 @@
 // Messages between the editor (browser) and an agent session (Durable Object).
 
+import type { AgentExtensionSpec, ExtensionCall } from "./extensions";
+
 export interface ModelRef {
   provider: string;
   modelId: string;
@@ -21,6 +23,8 @@ export interface PostContext {
   url: string;
   /** The whole file, front matter included, as it is in the editor (saved or not). */
   text: string;
+  /** Skills beyond the built-in ones (site skills, the author's own, editor extensions'), merged by name over the built-ins. */
+  skills?: { name: string; description: string; instructions: string; source?: string; scope?: "post" | "site" | "both" }[];
 }
 
 /** A find/replace suggestion. `find` must occur exactly once in the post text. */
@@ -34,7 +38,11 @@ export type ClientToServer =
   | { type: "post"; post: PostContext }
   | { type: "prompt"; text: string; model: ModelRef; requestId: string; label?: string }
   | { type: "abort" }
-  | { type: "reset" };
+  | { type: "reset" }
+  /** The editor extensions that are enabled now; replaces the previous set. */
+  | { type: "extensions"; extensions: AgentExtensionSpec[] }
+  /** The answer to an `extension_call`. */
+  | { type: "extension_result"; callId: string; ok: boolean; value?: unknown; error?: string };
 
 export type ChatItem =
   | { kind: "user"; id: number; text: string; label?: string }
@@ -43,7 +51,9 @@ export type ChatItem =
 
 export type ServerToClient =
   | { type: "view"; items: ChatItem[]; busy: boolean; partial?: string; usage?: { cost: number; tokens: number } }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** The agent wants an editor extension to run a tool or hook; answered with `extension_result`. */
+  | { type: "extension_call"; callId: string; call: ExtensionCall };
 
 export interface IndexedPost {
   path: string;
