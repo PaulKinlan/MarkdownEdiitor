@@ -6,6 +6,8 @@ export interface SiteRecord {
   handle: FileSystemDirectoryHandle;
   /** Where the local `hugo server` for this site is running. */
   previewOrigin: string;
+  /** Words the spell checker should accept on this site, as typed in settings. */
+  words?: string;
 }
 
 const KEY = "sites";

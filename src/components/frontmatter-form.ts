@@ -36,6 +36,9 @@ export class FrontMatterForm extends LitElement {
       .char-count { font-size: 11px; color: var(--fg-2); min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
       .chevron { transition: rotate 150ms var(--ease); }
       :host([collapsed]) .chevron { rotate: -90deg; }
+      .long { display: grid; gap: 4px; }
+      .long .row { justify-content: flex-end; font-size: 12px; color: var(--fg-2); }
+      .long .row .error { padding: 0; }
     `,
   ];
 
@@ -43,10 +46,14 @@ export class FrontMatterForm extends LitElement {
   @property() raw = "";
   @property() format: FrontMatterFormat = "yaml";
   @property({ type: Boolean, reflect: true }) collapsed = false;
+  /** Drafts a value for a summary or description field, when the browser can (Summarizer API). */
+  @property({ attribute: false }) summarize?: (field: string) => Promise<string>;
 
   @state() private mode: "form" | "raw" = "form";
   @state() private rawDraft = "";
   @state() private rawError = "";
+  @state() private drafting = "";
+  @state() private draftError = "";
 
   private emit(type: string, detail: unknown) {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
@@ -71,6 +78,20 @@ export class FrontMatterForm extends LitElement {
     });
   }
 
+  private async draft(key: string) {
+    if (!this.summarize) return;
+    this.drafting = key;
+    this.draftError = "";
+    try {
+      const value = await this.summarize(key);
+      if (value) this.set(key, value);
+    } catch (e) {
+      this.draftError = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.drafting = "";
+    }
+  }
+
   private renderField(key: string, value: unknown) {
     const id = `f-${key}`;
     const lower = key.toLowerCase();
@@ -91,7 +112,17 @@ export class FrontMatterForm extends LitElement {
         <button class="small" title="Set to now" @click=${() => this.set(key, new Date().toISOString())}>Now</button>
       </div>`;
     } else if (typeof value === "string" && (LONG_TEXT.has(lower) || value.length > 90 || value.includes("\n"))) {
-      control = html`<textarea id=${id} .value=${value} @change=${(e: Event) => this.set(key, (e.target as HTMLTextAreaElement).value)}></textarea>`;
+      const textarea = html`<textarea id=${id} .value=${value} @change=${(e: Event) => this.set(key, (e.target as HTMLTextAreaElement).value)}></textarea>`;
+      control =
+        this.summarize && LONG_TEXT.has(lower)
+          ? html`<div class="long">
+              ${textarea}
+              <div class="row">
+                ${this.drafting === key ? "Drafting on this device…" : this.draftError && html`<span class="error">${this.draftError}</span>`}
+                <button class="small" ?disabled=${!!this.drafting} title="Write a draft from the post with Chrome's on-device summarizer" @click=${() => this.draft(key)}>Draft ${key}</button>
+              </div>
+            </div>`
+          : textarea;
     } else if (typeof value === "string" || typeof value === "number" || value == null) {
       const isNumber = typeof value === "number";
       control = html`<div class="row">
