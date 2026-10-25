@@ -138,16 +138,19 @@ export class ToolsSettings extends LitElement {
   private async discover() {
     const source = this.editing as McpSource;
     if (!this.agentSettings || !source.url) return;
+    // The author may go Back, open another source or change the URL while this runs; only apply the answer to what asked.
+    const stillEditing = () => this.editing?.id === source.id && (this.editing as McpSource).url === source.url;
     this.busy = "Connecting…";
     this.error = "";
     try {
       const headers = Object.fromEntries(this.headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value]));
       const saved = this.settings.sources.some((s) => s.id === source.id);
       const tools = await discoverMcpTools(this.agentSettings, { url: source.url, headers, ...(saved ? { id: source.id } : {}) });
+      if (!stillEditing()) return;
       this.patch({ tools });
-      if (!source.name) this.patch({ name: new URL(source.url).hostname.split(".").slice(-2, -1)[0] ?? "server" });
+      if (!this.editing!.name) this.patch({ name: new URL(source.url).hostname.split(".").slice(-2, -1)[0] ?? "server" });
     } catch (e) {
-      this.error = message(e);
+      if (stillEditing()) this.error = message(e);
     } finally {
       this.busy = "";
     }

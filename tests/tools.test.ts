@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
-import { HTTP_PRESETS, SECRET_MASK, validateToolSettings, type HttpToolSource, type McpSource, type ToolSettings } from "../src/shared/tools";
+import { HTTP_PRESETS, SECRET_MASK, mcpToolName, validateToolSettings, type HttpToolSource, type McpSource, type ToolSettings } from "../src/shared/tools";
 import { cleanSchema, installConfiguredTools } from "../worker/tools";
 import { buildHttpRequest, shapeJson } from "../worker/tools/http";
 import { McpClient } from "../worker/tools/mcp";
@@ -72,6 +72,19 @@ describe("tool settings", () => {
   });
 });
 
+describe("MCP tool names", () => {
+  it("stay within 64 characters", () => {
+    expect(mcpToolName("a".repeat(40), "b".repeat(80)).length).toBe(64);
+  });
+
+  it("are checked for clashes before saving", () => {
+    const schema = { type: "object" };
+    const mcp: McpSource = { id: "m", kind: "mcp", name: "dict", enabled: true, url: "https://m.example/mcp", headers: {}, tools: [{ name: "look-up", inputSchema: schema }, { name: "look_up", inputSchema: schema }] };
+    expect(validateToolSettings({ nativeWebTools: true, sources: [mcp] }).join(" ")).toContain("mcp__dict__look_up");
+    expect(validateToolSettings({ nativeWebTools: true, sources: [{ ...mcp, disabled: ["look-up"] }] })).toEqual([]);
+  });
+});
+
 describe("HTTP tools", () => {
   it("puts parameters in the path, query and body", async () => {
     const get = buildHttpRequest(brave, { q: "hugo shortcodes", count: 3 });
@@ -121,6 +134,16 @@ describe("MCP client", () => {
     expect(result.content).toEqual([{ type: "text", text: "defined: hugo" }]);
     expect(calls.map((c) => c.method)).toEqual(["initialize", "notifications/initialized", "tools/list", "tools/call"]);
     expect(calls.slice(1).every((c) => c.session === "s-1" && c.auth === "Bearer t")).toBe(true);
+  });
+
+  it("stops waiting for a stalled handshake when the call is aborted", async () => {
+    const stalled = (_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("handshake aborted"))));
+    const client = new McpClient("https://mcp.example/mcp", {}, stalled as typeof fetch);
+    const controller = new AbortController();
+    const call = client.callTool("lookup", {}, controller.signal);
+    controller.abort(new Error("stopped"));
+    await expect(call).rejects.toThrow("stopped");
   });
 
   it("strips schema keywords the validator doesn't need", () => {

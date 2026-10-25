@@ -98,7 +98,8 @@ export function toolSlug(name: string, max = 40): string {
 }
 
 export function mcpToolName(server: string, tool: string): string {
-  return `mcp__${toolSlug(server, 20)}__${toolSlug(tool, 38)}`;
+  // 5 + 20 + 2 + 37 = 64 characters at most.
+  return `mcp__${toolSlug(server, 20)}__${toolSlug(tool, 37)}`;
 }
 
 /** Problems that stop settings being saved, as sentences. */
@@ -123,6 +124,13 @@ export function validateToolSettings(settings: ToolSettings): string[] {
       const prefix = `mcp__${toolSlug(s.name, 20)}`;
       if (names.has(prefix)) problems.push(`Two MCP servers are called ${s.name}.`);
       names.add(prefix);
+      const disabled = new Set(s.disabled ?? []);
+      for (const t of s.tools ?? []) {
+        if (disabled.has(t.name)) continue;
+        const name = mcpToolName(s.name, t.name);
+        if (names.has(name)) problems.push(`${s.name}: two tools would both be called ${name}; turn one off.`);
+        names.add(name);
+      }
     }
   }
   return problems;

@@ -1,6 +1,7 @@
 import type { McpToolInfo } from "../../src/shared/tools";
 
 const PROTOCOL_VERSION = "2025-06-18";
+const HANDSHAKE_TIMEOUT_MS = 30_000;
 
 export type McpContent =
   | { type: "text"; text: string }
@@ -33,12 +34,12 @@ export class McpClient {
     private fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
-  async listTools(): Promise<McpToolInfo[]> {
-    await this.initialize();
+  async listTools(signal?: AbortSignal): Promise<McpToolInfo[]> {
+    await this.initialize(signal);
     const tools: McpToolInfo[] = [];
     let cursor: string | undefined;
     do {
-      const page = (await this.request("tools/list", cursor ? { cursor } : {})) as { tools?: McpToolInfo[]; nextCursor?: string };
+      const page = (await this.request("tools/list", cursor ? { cursor } : {}, signal)) as { tools?: McpToolInfo[]; nextCursor?: string };
       for (const t of page.tools ?? []) tools.push({ name: t.name, description: t.description, inputSchema: t.inputSchema ?? { type: "object" } });
       cursor = page.nextCursor;
     } while (cursor && tools.length < 500);
@@ -46,23 +47,29 @@ export class McpClient {
   }
 
   async callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult> {
-    await this.initialize();
+    await this.initialize(signal);
     return (await this.request("tools/call", { name, arguments: args ?? {} }, signal)) as McpCallResult;
   }
 
-  private initialize(): Promise<void> {
+  /**
+   * The handshake is shared by concurrent calls, so it runs on its own timeout
+   * rather than any one caller's signal; each caller stops waiting when its
+   * own signal aborts.
+   */
+  private initialize(signal?: AbortSignal): Promise<void> {
     this.ready ??= (async () => {
-      await this.request("initialize", {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "hugo-editor", version: "1.0.0" },
-      });
-      await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
+      const timeout = AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS);
+      await this.request(
+        "initialize",
+        { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "hugo-editor", version: "1.0.0" } },
+        timeout,
+      );
+      await this.post({ jsonrpc: "2.0", method: "notifications/initialized" }, timeout);
     })().catch((e) => {
       this.ready = undefined;
       throw e;
     });
-    return this.ready;
+    return abortable(this.ready, signal);
   }
 
   private async request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -92,6 +99,17 @@ export class McpClient {
     if (!res.ok && res.status !== 202) throw new Error(`MCP server returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
     return res;
   }
+}
+
+/** Waits for `promise`, rejecting early if `signal` aborts. */
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 type RpcMessage = { id?: number | string; result?: unknown; error?: { code?: number; message?: string } };
