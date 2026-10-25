@@ -8,7 +8,8 @@ name: Deploy
 #
 # Needs repository secrets CLOUDFLARE_API_TOKEN (Workers Scripts: Edit) and
 # CLOUDFLARE_ACCOUNT_ID. Without them, the workflow still builds and tests.
-# Agent secrets (model API keys, search keys, EDITOR_TOKEN) set as repository
+# Agent secrets (model API keys, search keys, EDITOR_TOKEN; CLAUDE_API_KEY works
+# as the Anthropic key) set as repository
 # secrets are copied to each Worker on deploy. Preview Workers also get the
 # scripted demo model, so the agent loop can be tried without spending tokens.
 
@@ -101,7 +102,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # CLAUDE_API_KEY is accepted as another name for the Anthropic key.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.CLAUDE_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

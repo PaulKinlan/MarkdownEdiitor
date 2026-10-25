@@ -46,7 +46,7 @@ Set these as Worker secrets (`wrangler secret put NAME`), or as GitHub repositor
 
 | Secret | |
 |---|---|
-| `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Any one is enough |
+| `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Any one is enough. The deploy also accepts a `CLAUDE_API_KEY` repository secret as the Anthropic key, and the Live tools workflow uses it to check Claude's web search and fetch. |
 | `DEEPSEEK_API_KEY`, `BRAVE_API_KEY` or `TAVILY_API_KEY` | Enables `web_search` (the first set of Brave, Tavily, DeepSeek). DeepSeek also backs `fetch_url`. |
 | `EDITOR_TOKEN` | Requires this token on every `/api` call. Set it in the editor under Settings → Assistant. **Set this (or put the Worker behind Cloudflare Access) before adding model keys**, or anyone with the URL can spend them. |
 | `ALLOWED_ORIGINS` | Comma-separated editor origins that may call this API from another origin, when the Assistant's agent server setting points here. |
