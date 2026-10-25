@@ -28,7 +28,11 @@ function registries(): Plugin {
     buildStart: () => writeRegistries(),
     configureServer(server) {
       server.watcher.add(SKILLS_DIR);
-      const update = (path: string) => void (path.startsWith(SKILLS_DIR) && writeRegistries());
+      // A broken file while editing keeps the last good registry and says why, instead of stopping the server.
+      const update = (path: string) => {
+        if (!path.startsWith(SKILLS_DIR)) return;
+        writeRegistries().catch((e: unknown) => server.config.logger.error(`Registries not updated: ${e instanceof Error ? e.message : e}`));
+      };
       for (const event of ["add", "change", "unlink"] as const) server.watcher.on(event, update);
     },
   };
