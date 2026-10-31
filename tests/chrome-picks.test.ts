@@ -24,19 +24,40 @@ describe("self-sizing demos", () => {
 
   const shortcode = `{{ $src := .Get 0 }}{{ $height := .Get 1 | default "400" }}\n<iframe src="{{ $src }}" style="height: {{ $height }}px" loading="lazy"></iframe>\n`;
 
+  const updated = (template: string) => {
+    const change = makeShortcodeSelfSizing(template);
+    if (change.kind !== "updated") throw new Error(`expected an update, got ${change.kind}`);
+    return change.text;
+  };
+
   it("teaches the iframe shortcode to size opted-in local demos", () => {
-    const out = makeShortcodeSelfSizing(shortcode)!;
-    expect(out.indexOf("$selfSizing :=")).toBeGreaterThan(out.indexOf("$src :="));
+    const out = updated(shortcode);
+    expect(out.indexOf("$sizingSrc := $src")).toBeGreaterThan(out.indexOf("$src :="));
     expect(out).toContain(`<iframe{{ if $selfSizing }} class="self-sizing"{{ end }} src="{{ $src }}"`);
-    expect(out).toContain("frame-sizing: content-height");
+    // Overrides the inline style height when supported, and keeps it as the fallback.
+    expect(out).toContain("height: auto !important; frame-sizing: content-height");
     expect(out).toContain(`style="height: {{ $height }}px"`);
-    expect(makeShortcodeSelfSizing(out)).toBeUndefined();
+    expect(makeShortcodeSelfSizing(out)).toEqual({ kind: "already" });
   });
 
-  it("leaves shortcodes it can't safely edit alone", () => {
-    expect(makeShortcodeSelfSizing(`<div>{{ .Inner }}</div>`)).toBeUndefined();
-    expect(makeShortcodeSelfSizing(`<iframe class="demo" src="{{ $src }}"></iframe>`)).toBeUndefined();
-    expect(makeShortcodeSelfSizing(`<iframe src="{{ .Get 0 }}"></iframe>`)).toBeUndefined();
+  it("keeps everything in the iframe's scope", () => {
+    const out = updated(`{{ $src := .Get 0 }}{{ if $src }}<iframe src="{{ $src }}"></iframe>{{ end }}`);
+    const ifAt = out.indexOf("{{ if $src }}");
+    expect(out.indexOf("$selfSizing :=")).toBeGreaterThan(ifAt);
+    expect(out.lastIndexOf("$selfSizing")).toBeLessThan(out.indexOf("</iframe>{{ end }}"));
+    expect(out.endsWith("</iframe>{{ end }}")).toBe(true);
+  });
+
+  it("handles a src that reads a shortcode argument directly", () => {
+    const out = updated(`<iframe src="{{ .Get 0 }}" height="{{ .Get 1 }}"></iframe>\n`);
+    expect(out).toContain("{{- $sizingSrc := .Get 0 -}}");
+    expect(updated(`<iframe src="{{ .Get "src" }}"></iframe>`)).toContain(`$sizingSrc := .Get "src"`);
+  });
+
+  it("says why it can't edit a shortcode", () => {
+    expect(makeShortcodeSelfSizing(`<div>{{ .Inner }}</div>`)).toMatchObject({ kind: "unsupported" });
+    expect(makeShortcodeSelfSizing(`<iframe class="demo" src="{{ $src }}"></iframe>`)).toMatchObject({ kind: "unsupported" });
+    expect(makeShortcodeSelfSizing(`<iframe src="{{ .Site.Params.demo }}"></iframe>`)).toMatchObject({ kind: "unsupported" });
   });
 });
 

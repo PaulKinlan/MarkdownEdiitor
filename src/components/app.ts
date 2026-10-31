@@ -674,6 +674,8 @@ export class MdApp extends LitElement {
       const summary = config ? summarise(requested.path, config, post, file.lastModified) : requested;
       const switching = this.open?.summary.path !== summary.path;
       const show = () => {
+        // A transition runs this later, after the snapshot: another open or a site switch may have happened since.
+        if (generation !== this.postGeneration || site !== this.site) return;
         this.replaceSummary(summary);
         this.open = { summary, post, savedText: text, lastModified: file.lastModified };
         this.loadCount++;
