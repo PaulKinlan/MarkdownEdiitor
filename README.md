@@ -9,7 +9,7 @@ A markdown editor for Hugo blogs (built for [aifoc.us](https://aifoc.us) and [pa
 | [The editor](docs/features/editor.md) | Local Hugo site folders, CodeMirror, a front matter form with minimal-diff saves, new posts from section templates, images, safe saves, and a live preview from your `hugo server`. |
 | [The assistant](docs/features/assistant.md) | Pi Durable agents per post and per site, any model with a key, quick edits, skills (built in, from the site folder or GitHub), research notes, web search, MCP servers and HTTP tools. The model loop runs on the agent server or on the device, and other agents can read the site over MCP. |
 | [Extensions](docs/features/extensions.md) | Pi-style extensions in Web Workers: commands, toolbar buttons, status items, underlines, panels, and agent tools, skills and hooks. The API is in [docs/extensions.md](docs/extensions.md). |
-| [Chrome features](docs/features/chrome.md) | On-device model, Summarizer drafts, folder watching, WebMCP tools and a spell check dictionary, where Chrome has them. |
+| [Chrome features](docs/features/chrome.md) | On-device model, Summarizer drafts, folder watching, WebMCP tools, a spell check dictionary, self-sizing demos, view transitions and hover cards, where Chrome has them. |
 | [Installing it as an app](docs/features/pwa.md) | Offline PWA with updates on demand, file handling and share target. |
 | [Security and telemetry](docs/features/security.md) | Permissions-Policy, CSP with Trusted Types, and the Observability Durable Object. |
 | [Deploys and branch previews](docs/features/deploys.md) | `main` deploys to Cloudflare; every branch gets its own preview Worker. |
