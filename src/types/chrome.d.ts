@@ -129,3 +129,16 @@ interface Navigator {
   /** Where early WebMCP builds put it, before it moved to `document`. */
   readonly modelContext?: ModelContext;
 }
+
+// ---- Element-scoped view transitions (Chrome 147) ----
+
+interface Element {
+  startViewTransition?(update: () => unknown): ViewTransition;
+}
+
+// ---- Interest invokers (Chrome 142) ----
+
+interface InterestEvent extends Event {
+  /** The element (a button or link with `interestfor`) the user showed interest in. */
+  readonly source: Element | null;
+}

@@ -19,16 +19,18 @@ export interface PostSummary {
   lastModified: number;
 }
 
-export async function listPosts(root: FileSystemDirectoryHandle, config: HugoConfig): Promise<PostSummary[]> {
-  return summariseAll(await walk(root, config.contentDir, isContentFile), config);
+/** Lists the site's posts. With `previous`, files whose modification time hasn't changed aren't read again. */
+export async function listPosts(root: FileSystemDirectoryHandle, config: HugoConfig, previous?: readonly PostSummary[]): Promise<PostSummary[]> {
+  return summariseAll(await walk(root, config.contentDir, isContentFile), config, previous);
 }
 
 /** Research notes and ideas: markdown files under notes/ at the site root. */
-export async function listNotes(root: FileSystemDirectoryHandle, config: HugoConfig): Promise<PostSummary[]> {
-  return summariseAll(await walk(root, NOTES_DIR, (name) => /\.(md|markdown)$/i.test(name)), config);
+export async function listNotes(root: FileSystemDirectoryHandle, config: HugoConfig, previous?: readonly PostSummary[]): Promise<PostSummary[]> {
+  return summariseAll(await walk(root, NOTES_DIR, (name) => /\.(md|markdown)$/i.test(name)), config, previous);
 }
 
-async function summariseAll(entries: Awaited<ReturnType<typeof walk>>, config: HugoConfig): Promise<PostSummary[]> {
+async function summariseAll(entries: Awaited<ReturnType<typeof walk>>, config: HugoConfig, previous?: readonly PostSummary[]): Promise<PostSummary[]> {
+  const known = new Map(previous?.map((p) => [p.path, p]));
   const out: PostSummary[] = [];
   // Bounded concurrency: paul.kinlan.me has ~800 files and a burst of reads is slower than a steady pipe.
   let i = 0;
@@ -37,7 +39,8 @@ async function summariseAll(entries: Awaited<ReturnType<typeof walk>>, config: H
       const entry = entries[i++];
       try {
         const file = await entry.handle.getFile();
-        out.push(summarise(entry.path, config, Post.parse(await file.text()), file.lastModified));
+        const same = known.get(entry.path);
+        out.push(same && same.lastModified === file.lastModified ? same : summarise(entry.path, config, Post.parse(await file.text()), file.lastModified));
       } catch (e) {
         console.warn(`Skipping ${entry.path}`, e);
       }
@@ -45,6 +48,13 @@ async function summariseAll(entries: Awaited<ReturnType<typeof walk>>, config: H
   };
   await Promise.all(Array.from({ length: 16 }, worker));
   return sortPosts(out);
+}
+
+/** Whether two post lists hold the same summaries (by identity), so an unchanged rescan can skip a render. */
+export function samePosts(a: readonly PostSummary[], b: readonly PostSummary[]): boolean {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a);
+  return b.every((p) => ids.has(p));
 }
 
 /** Summarises a post, or a note (a file outside the content directory, which has no URL). */

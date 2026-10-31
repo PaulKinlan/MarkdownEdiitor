@@ -4,12 +4,14 @@ import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
 import { readHugoConfig, listShortcodes, isContentFile, type HugoConfig } from "../lib/hugo";
 import { getDir, getFile, writeFile, exists, readText } from "../lib/fs";
-import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise, sortPosts, type PostSummary } from "../lib/posts";
+import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise, sortPosts, samePosts, type PostSummary } from "../lib/posts";
+import { postCard } from "../lib/post-card";
 import { isNotePath, NOTES_DIR } from "../shared/notes";
 import { findExistingSite, hasPermission, loadSites, requestPermission, saveSites, type SiteRecord } from "../lib/sites";
 import { createSampleSite } from "../lib/sample-site";
 import { canSummarize, summarizePost } from "../lib/on-device";
 import { watchFolder, type FolderChanges } from "../lib/file-watcher";
+import { scopedTransition } from "../lib/transitions";
 import { listenForLaunches, persistStorage, registerServiceWorker, type Launch } from "../lib/pwa";
 import type { Edit } from "../shared/protocol";
 import { controls, lightDismiss } from "./shared";
@@ -34,6 +36,8 @@ interface OpenPost {
   lastModified: number;
 }
 
+/** How often to re-check the site folder when it can't be watched. */
+const POLL_MS = 10_000;
 const LAST_SITE_KEY = "md-editor:last-site";
 const PREVIEW_KEY = "md-editor:preview-open";
 const TAB_KEY = "md-editor:side-tab";
@@ -94,6 +98,13 @@ export class MdApp extends LitElement {
       .title { display: flex; align-items: center; gap: 6px; font-weight: 500; line-height: 1.35; }
       .title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .meta { display: block; margin-top: 2px; font-size: 12px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* Hover card: anchored to the list item that showed interest, flipped when there's no room. */
+      .post-card { inset: auto; margin: 0 0 0 6px; position-area: right span-bottom; position-try-fallbacks: flip-inline, flip-block; width: min(320px, 90vw); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); box-shadow: 0 6px 24px rgb(0 0 0 / 0.18); font-size: 13px; line-height: 1.4; interest-delay: 400ms 150ms; }
+      .post-card p { margin: 6px 0; color: var(--fg); }
+      .post-card .muted { margin-top: 2px; font-size: 12px; }
+      .post-card .tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; }
+      .post-card .tags span { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--hover); color: var(--fg-2); }
+      .post-card .where { margin-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--fg-2); overflow-wrap: anywhere; }
       .badge { flex: none; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
       main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
       .toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 12px; min-height: 40px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -177,6 +188,8 @@ export class MdApp extends LitElement {
   /** Research notes and ideas under notes/ (see shared/notes.ts). */
   @state() private notes: PostSummary[] = [];
   @state() private listing: "posts" | "notes" = "posts";
+  /** The post under the pointer or focus, shown in the list's hover card. */
+  @state() private cardPath?: string;
   @state() private loading = false;
   @state() private filter = "";
   @state() private sectionFilter = "*";
@@ -305,6 +318,7 @@ export class MdApp extends LitElement {
     super.connectedCallback();
     window.addEventListener("beforeunload", this.onBeforeUnload);
     window.addEventListener("focus", this.onFocus);
+    document.addEventListener("visibilitychange", this.onVisibility);
     window.addEventListener("keydown", this.onKeydown);
     NARROW.addEventListener("change", this.onNarrowChange);
     this.contributions.addEventListener("change", this.onContributionsChange);
@@ -324,6 +338,7 @@ export class MdApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     window.removeEventListener("focus", this.onFocus);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     window.removeEventListener("keydown", this.onKeydown);
     NARROW.removeEventListener("change", this.onNarrowChange);
     this.deactivateModules?.();
@@ -340,8 +355,40 @@ export class MdApp extends LitElement {
     if (this.dirty) e.preventDefault();
   };
 
-  /** On focus, catches up with edits made outside the editor when the browser can't watch the folder. */
-  private onFocus = () => void this.checkOpenPost();
+  /**
+   * On focus, and when the tab comes back into view, catches up with edits
+   * made outside the editor. The folder watcher normally has them already, but
+   * it can miss changes (or be unavailable), and this costs only a directory walk.
+   */
+  private onFocus = () => void this.catchUp();
+  private onVisibility = () => document.visibilityState === "visible" && void this.catchUp();
+
+  private catchingUp?: Promise<void>;
+
+  /** Re-lists posts and notes, re-reading only files whose modification time changed, then checks the open post. */
+  private catchUp(): Promise<void> {
+    this.catchingUp ??= (async () => {
+      try {
+        const { site, config } = this;
+        if (site && config && !this.needsPermission) {
+          const [posts, notes] = await Promise.all([listPosts(site.handle, config, this.posts), listNotes(site.handle, config, this.notes)]);
+          if (site.id === this.site?.id && config === this.config) {
+            // Keep the open post listed even if it vanished: its text is still in the editor.
+            const open = this.open && !posts.some((p) => p.path === this.open!.summary.path) && this.posts.find((p) => p.path === this.open!.summary.path);
+            const next = open ? sortPosts([...posts, open]) : posts;
+            if (!samePosts(next, this.posts)) this.posts = next;
+            if (!samePosts(notes, this.notes)) this.notes = notes;
+          }
+        }
+        await this.checkOpenPost();
+      } catch (e) {
+        console.warn("Couldn't refresh the post list", e);
+      } finally {
+        this.catchingUp = undefined;
+      }
+    })();
+    return this.catchingUp;
+  }
 
   /** Picks up edits made outside the editor (another app, git checkout, an agent). */
   private async checkOpenPost() {
@@ -370,9 +417,14 @@ export class MdApp extends LitElement {
     this.stopWatching?.();
     this.stopWatching = undefined;
     // Settings edits replace the site record, so match it by id rather than by object.
-    const stop = await watchFolder(site.handle, (changes) => void this.onFolderChange(site.id, changes));
+    let stop = await watchFolder(site.handle, (changes) => void this.onFolderChange(site.id, changes));
+    if (!stop) {
+      // No FileSystemObserver, or it refused this folder: check every few seconds while the tab is visible.
+      const timer = setInterval(() => document.visibilityState === "visible" && void this.catchUp(), POLL_MS);
+      stop = () => clearInterval(timer);
+    }
     if (site.id === this.site?.id) this.stopWatching = stop;
-    else stop?.();
+    else stop();
   }
 
   private async onFolderChange(siteId: string, changes: FolderChanges) {
@@ -382,7 +434,7 @@ export class MdApp extends LitElement {
     // A moved or deleted folder can hold many posts: re-list everything rather than guess what was inside.
     const rescan = changes.rescan || [...changes.dirs].some((d) => inContent(d) || config.contentDir.startsWith(`${d}/`) || d === config.contentDir);
     if (rescan) {
-      const posts = await listPosts(site.handle, config);
+      const posts = await listPosts(site.handle, config, this.posts);
       if (site.id !== this.site?.id) return;
       this.posts = posts;
     } else {
@@ -390,7 +442,7 @@ export class MdApp extends LitElement {
       if (changed.length) await this.refreshPosts(site, config, changed);
     }
     if (changes.rescan || [...changes.paths, ...changes.dirs].some((p) => isNotePath(p) || p === NOTES_DIR)) {
-      const notes = await listNotes(site.handle, config);
+      const notes = await listNotes(site.handle, config, this.notes);
       if (site.id !== this.site?.id) return;
       this.notes = notes;
     }
@@ -620,15 +672,23 @@ export class MdApp extends LitElement {
       const post = Post.parse(text);
       // The file may have changed since the list was built: refresh its title, URL and draft state.
       const summary = config ? summarise(requested.path, config, post, file.lastModified) : requested;
-      this.replaceSummary(summary);
       const switching = this.open?.summary.path !== summary.path;
-      this.open = { summary, post, savedText: text, lastModified: file.lastModified };
-      this.loadCount++;
-      this.text = text;
-      this.extensions.postOpened();
-      if (switching) this.mobileView = "write";
-      this.changedOnDisk = false;
-      this.error = "";
+      const show = () => {
+        // A transition runs this later, after the snapshot: another open or a site switch may have happened since.
+        if (generation !== this.postGeneration || site !== this.site) return;
+        this.replaceSummary(summary);
+        this.open = { summary, post, savedText: text, lastModified: file.lastModified };
+        this.loadCount++;
+        this.text = text;
+        this.extensions.postOpened();
+        if (switching) this.mobileView = "write";
+        this.changedOnDisk = false;
+        this.error = "";
+        return this.updateComplete;
+      };
+      // Cross-fade the editor from one post to the next; a reload of the same post just swaps the text.
+      if (switching && this.open && !this.narrow) await scopedTransition(this.renderRoot.querySelector("main"), show);
+      else await show();
     } catch (e) {
       if (generation === this.postGeneration) this.error = e instanceof Error ? e.message : String(e);
     }
@@ -918,6 +978,15 @@ export class MdApp extends LitElement {
     for (const section of this.coreSettings()) addSettingsSection(section);
   }
 
+  /** Switches side tab from its button, cross-fading the panel. */
+  private switchSideTab(tab: string) {
+    if (tab === this.shownSideTab) return;
+    void scopedTransition(this.renderRoot.querySelector(".side"), () => {
+      this.setSideTab(tab);
+      return this.updateComplete;
+    });
+  }
+
   private setSideTab(tab: string) {
     this.sideTab = tab;
     if (this.narrow && this.contributions.sideTabs.some((t) => t.id === tab && t.icon)) this.mobileView = tab;
@@ -1066,15 +1135,36 @@ export class MdApp extends LitElement {
       <ul>
         ${posts.map(
           (p) => html`<li>
-            <button aria-current=${p.path === this.open?.summary.path} @click=${() => this.openPost(p)}>
+            <button aria-current=${p.path === this.open?.summary.path} interestfor="post-card" data-path=${p.path} @click=${() => this.openPost(p)}>
               <span class="title"><span>${p.title}</span>${p.draft ? html`<span class="badge">Draft</span>` : nothing}${notes && typeof p.frontMatter.status === "string" ? html`<span class="badge">${p.frontMatter.status}</span>` : nothing}</span>
               <span class="meta">${p.date ? DATE_FORMAT.format(p.date) : "No date"} · ${p.url || p.path}</span>
             </button>
           </li>`,
         )}
       </ul>
+      ${this.renderPostCard(all)}
     </aside>`;
   }
+
+  /** One hover card for the whole list, filled from the hovered button (interest invokers, Chrome 142). */
+  private renderPostCard(all: PostSummary[]) {
+    const hovered = this.cardPath ? all.find((p) => p.path === this.cardPath) : undefined;
+    const card = hovered && postCard(hovered);
+    return html`<div id="post-card" class="post-card" popover="hint" @interest=${this.onCardInterest}>
+      ${card
+        ? html`<strong>${card.title}</strong>
+            <div class="muted">${hovered!.date ? DATE_FORMAT.format(hovered!.date) : "No date"}${card.status ? html` · <span class="badge">${card.status}</span>` : nothing}</div>
+            ${card.excerpt ? html`<p>${card.excerpt}</p>` : nothing}
+            ${card.tags.length ? html`<div class="tags">${card.tags.map((t) => html`<span>${t}</span>`)}</div>` : nothing}
+            <div class="where">${card.where}</div>`
+        : nothing}
+    </div>`;
+  }
+
+  private onCardInterest = (e: Event) => {
+    const source = (e as InterestEvent).source;
+    this.cardPath = source instanceof HTMLElement ? source.dataset.path : undefined;
+  };
 
   private renderEditor() {
     if (!this.open) return html`<main>${this.renderOrphan()}${this.renderEmpty()}</main>`;
@@ -1239,11 +1329,11 @@ export class MdApp extends LitElement {
     return html`<section class="side">
       ${this.narrow ? nothing : html`<div class="tabs"><div class="seg" role="tablist">
         ${this.contributions.sideTabs.map(
-          (t) => html`<button role="tab" aria-selected=${id === t.id} ?disabled=${!(t.available?.() ?? true)} @click=${() => this.setSideTab(t.id)}>${t.title}</button>`,
+          (t) => html`<button role="tab" aria-selected=${id === t.id} ?disabled=${!(t.available?.() ?? true)} @click=${() => this.switchSideTab(t.id)}>${t.title}</button>`,
         )}
         ${this.extensions.host.panels.map((p) => {
           const panel = `ext:${p.extension}:${p.spec.id}`;
-          return html`<button role="tab" title=${p.name} aria-selected=${id === panel} @click=${() => this.setSideTab(panel)}>${p.spec.title}</button>`;
+          return html`<button role="tab" title=${p.name} aria-selected=${id === panel} @click=${() => this.switchSideTab(panel)}>${p.spec.title}</button>`;
         })}
       </div></div>`}
       ${id.startsWith("ext:") ? this.renderExtensionPanel(id) : tab ? tab.render() : nothing}
