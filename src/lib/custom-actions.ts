@@ -36,18 +36,31 @@ export function removeCustomAction(id: string, settings?: AgentSettings): EditAc
 
 /** Merges this browser's custom edits with the server's. Returns true if anything here changed. */
 export async function syncCustomActions(settings: AgentSettings): Promise<boolean> {
-  const local: SyncedEntries<EditAction> = {};
-  for (const [id, at] of Object.entries(readJson<Record<string, number>>(DELETED_KEY, {}))) local[id] = { deleted: true, updatedAt: at };
-  // Edits saved before syncing existed have no time; 0 uploads them without overriding anything newer.
-  for (const a of loadCustomActions()) local[a.id] = { value: a, updatedAt: a.updatedAt ?? 0 };
-  const { entries, changed } = await syncEntries(settings, FEATURE, local);
-  if (!changed.length) return false;
+  const local = localEntries();
+  const newer = await syncEntries(settings, FEATURE, local);
+  // Merge into what's here now, not the snapshot: an edit saved during the sync wins if it's newer.
+  const now = localEntries();
+  let changed = false;
+  for (const [id, theirs] of Object.entries(newer)) {
+    if ((now[id]?.updatedAt ?? -1) >= theirs.updatedAt) continue;
+    now[id] = theirs;
+    changed = true;
+  }
+  if (!changed) return false;
   const actions: EditAction[] = [];
   const deleted: Record<string, number> = {};
-  for (const [id, e] of Object.entries(entries)) {
+  for (const [id, e] of Object.entries(now)) {
     if (e.deleted || !e.value) deleted[id] = e.updatedAt;
     else actions.push({ ...e.value, id, updatedAt: e.updatedAt });
   }
   writeLocal(actions, deleted);
   return true;
+}
+
+function localEntries(): SyncedEntries<EditAction> {
+  const local: SyncedEntries<EditAction> = {};
+  for (const [id, at] of Object.entries(readJson<Record<string, number>>(DELETED_KEY, {}))) local[id] = { deleted: true, updatedAt: at };
+  // Edits saved before syncing existed have no time; 0 uploads them without overriding anything newer.
+  for (const a of loadCustomActions()) local[a.id] = { value: a, updatedAt: a.updatedAt ?? 0 };
+  return local;
 }

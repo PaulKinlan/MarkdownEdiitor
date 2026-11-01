@@ -9,6 +9,7 @@ const settings = { server: "https://editor.test", token: "t" };
 /** A stand-in for /api/features: feature -> key -> value. */
 function fakeServer() {
   const data = new Map<string, Map<string, unknown>>();
+  const failing = new Set<string>();
   const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(String(input));
     const [, , , feature, , key] = url.pathname.split("/");
@@ -17,12 +18,15 @@ function fakeServer() {
     if (!key) return Response.json([...store.keys()].map((k) => ({ key: k, updatedAt: 1 })));
     const k = decodeURIComponent(key);
     if (init?.method === "PUT") {
-      store.set(k, JSON.parse(String(init.body)));
+      const value = JSON.parse(String(init.body));
+      const current = store.get(k) as { updatedAt?: number } | undefined;
+      if (!(url.searchParams.has("ifNewer") && current && (current.updatedAt ?? 0) >= value.updatedAt)) store.set(k, value);
       return Response.json({ key: k });
     }
+    if (failing.has(k)) return Response.json({ error: "boom" }, { status: 500 });
     return store.has(k) ? Response.json({ key: k, value: store.get(k) }) : Response.json({ error: "Not found" }, { status: 404 });
   }) as typeof fetch;
-  return { data, fetchImpl };
+  return { data, failing, fetchImpl };
 }
 
 describe("syncEntries", () => {
@@ -40,11 +44,10 @@ describe("syncEntries", () => {
       c: { value: "local c", updatedAt: 0 },
       gone: { value: "stale", updatedAt: 2 },
     };
-    const { entries, changed } = await syncEntries(settings, "f", local, fetchImpl);
-    expect(changed.sort()).toEqual(["a", "gone"]);
-    expect(entries.a.value).toBe("server a");
-    expect(entries.gone.deleted).toBe(true);
-    expect(entries["never-here"]).toBeUndefined();
+    const newer = await syncEntries(settings, "f", local, fetchImpl);
+    expect(Object.keys(newer).sort()).toEqual(["a", "gone"]);
+    expect(newer.a.value).toBe("server a");
+    expect(newer.gone.deleted).toBe(true);
     expect(data.get("f")!.get("b")).toEqual({ value: "local b", updatedAt: 15 });
     expect(data.get("f")!.get("c")).toEqual({ value: "local c", updatedAt: 0 });
   });
@@ -55,7 +58,39 @@ function memoryKV() {
   return { m, kv: { get: async (k: string) => m.get(k), set: async (k: string, v: unknown) => void m.set(k, v), keys: async () => [...m.keys()] } };
 }
 
+describe("syncEntries failures and races", () => {
+  it("uploads nothing when a server entry can't be read", async () => {
+    const { data, failing, fetchImpl } = fakeServer();
+    data.set("f", new Map<string, unknown>([["a", { value: "newer on server", updatedAt: 50 }]]));
+    failing.add("a");
+    await expect(syncEntries(settings, "f", { a: { value: "stale", updatedAt: 0 } }, fetchImpl)).rejects.toThrow();
+    expect(data.get("f")!.get("a")).toEqual({ value: "newer on server", updatedAt: 50 });
+  });
+
+  it("keeps the newer server value when an older upload arrives late", async () => {
+    const { data, fetchImpl } = fakeServer();
+    const { pushEntry } = await import("../src/lib/synced");
+    await pushEntry(settings, "f", "a", { value: "new", updatedAt: 20 }, fetchImpl);
+    await pushEntry(settings, "f", "a", { value: "old", updatedAt: 10 }, fetchImpl);
+    expect(data.get("f")!.get("a")).toEqual({ value: "new", updatedAt: 20 });
+  });
+});
+
 describe("SyncedExtensionStorage", () => {
+  it("doesn't put a download over a save made during the sync", async () => {
+    const server = fakeServer();
+    server.data.set("extension-data", new Map<string, unknown>([["extension:snippets:snippets", { value: { a: "server" }, updatedAt: 5 }]]));
+    const local = memoryKV();
+    const storage = new SyncedExtensionStorage(() => undefined, local.kv, server.fetchImpl);
+    // The save lands while the sync is reading the server.
+    const slowFetch = (async (...args: Parameters<typeof fetch>) => {
+      if (String(args[0]).includes("snippets%3Asnippets") && !args[1]?.method) await storage.set("extension:snippets:snippets", { a: "typed now" });
+      return server.fetchImpl(...args);
+    }) as typeof fetch;
+    await new SyncedExtensionStorage(() => undefined, local.kv, slowFetch).sync(settings);
+    expect(await storage.get("extension:snippets:snippets")).toEqual({ a: "typed now" });
+  });
+
   it("carries snippets saved in one browser to a fresh one", async () => {
     const server = fakeServer();
     const old = memoryKV();

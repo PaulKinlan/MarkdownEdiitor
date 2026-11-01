@@ -4,7 +4,8 @@ import { apiUrl, type AgentSettings } from "./agent-client";
 // extension data) are kept in that browser and copied to the agent server's
 // FeatureStore (/api/features/<feature>/global/<key>), so a new machine gets
 // them back. Each key carries the time it last changed; the newer side wins,
-// and removals are kept as tombstones so they travel too.
+// on the server too (?ifNewer), and removals are kept as tombstones so they
+// travel as well.
 
 export interface SyncedEntry<T = unknown> {
   value?: T;
@@ -30,9 +31,9 @@ async function call<T>(settings: AgentSettings, path: string, init: RequestInit 
   return body;
 }
 
-/** Uploads one entry. */
+/** Uploads one entry, unless the server already holds a change at least as new. */
 export function pushEntry(settings: AgentSettings, feature: string, key: string, entry: SyncedEntry, fetchImpl: Fetch = fetch) {
-  return call(settings, featurePath(feature, key), { method: "PUT", body: JSON.stringify(entry) }, fetchImpl);
+  return call(settings, `${featurePath(feature, key)}?ifNewer=1`, { method: "PUT", body: JSON.stringify(entry) }, fetchImpl);
 }
 
 function isEntry(v: unknown): v is SyncedEntry {
@@ -41,31 +42,23 @@ function isEntry(v: unknown): v is SyncedEntry {
 
 /**
  * Brings local entries and the server's together. For each key the newer
- * change wins; keys that are newer here (or only here) are uploaded.
- * Returns the merged entries and the keys whose local copy changed.
+ * change wins; keys that are newer here (or only here) are uploaded. If any
+ * server entry can't be read, nothing is uploaded or changed. Returns the
+ * server entries that are newer than the local ones.
  */
-export async function syncEntries<T>(
-  settings: AgentSettings,
-  feature: string,
-  local: SyncedEntries<T>,
-  fetchImpl: Fetch = fetch,
-): Promise<{ entries: SyncedEntries<T>; changed: string[] }> {
+export async function syncEntries<T>(settings: AgentSettings, feature: string, local: SyncedEntries<T>, fetchImpl: Fetch = fetch): Promise<SyncedEntries<T>> {
   const keys = await call<{ key: string }[]>(settings, featurePath(feature), {}, fetchImpl);
   const server = new Map<string, SyncedEntry<T>>();
   await Promise.all(
     keys.map(async ({ key }) => {
-      const got = await call<{ value: unknown }>(settings, featurePath(feature, key), {}, fetchImpl).catch(() => undefined);
-      if (got && isEntry(got.value)) server.set(key, got.value as SyncedEntry<T>);
+      const got = await call<{ value: unknown }>(settings, featurePath(feature, key), {}, fetchImpl);
+      if (isEntry(got.value)) server.set(key, got.value as SyncedEntry<T>);
     }),
   );
-  const entries: SyncedEntries<T> = { ...local };
-  const changed: string[] = [];
+  const newer: SyncedEntries<T> = {};
   for (const [key, theirs] of server) {
     const mine = local[key];
-    if (mine ? mine.updatedAt < theirs.updatedAt : !theirs.deleted) {
-      entries[key] = theirs;
-      changed.push(key);
-    }
+    if (mine ? mine.updatedAt < theirs.updatedAt : !theirs.deleted) newer[key] = theirs;
   }
   await Promise.all(
     Object.entries(local).map(([key, mine]) => {
@@ -73,7 +66,7 @@ export async function syncEntries<T>(
       if (!theirs || theirs.updatedAt < mine.updatedAt) return pushEntry(settings, feature, key, mine, fetchImpl).catch(() => undefined);
     }),
   );
-  return { entries, changed };
+  return newer;
 }
 
 interface KeyValues {
@@ -82,30 +75,46 @@ interface KeyValues {
   keys(): Promise<IDBValidKey[]>;
 }
 
+/** Where a key's change time is kept: its own entry, so saves of different keys never race. */
+const timeKey = (timesPrefix: string, key: string) => `${timesPrefix}${key}`;
+/** When a key last changed here; undefined if it never has since syncing existed. */
+const timeOf = async (kv: KeyValues, timesPrefix: string, key: string) => {
+  const t = await kv.get(timeKey(timesPrefix, key));
+  return typeof t === "number" ? t : undefined;
+};
+
 /**
- * Syncs the keys starting with `prefix` in a key/value store, whose change
- * times are kept under `timesKey`. Returns the keys that changed here.
+ * Syncs the keys starting with `prefix` in a key/value store, with each
+ * key's change time under `timesPrefix + key`. Returns the keys that changed here.
  */
-export async function syncKeyValues(settings: AgentSettings, feature: string, prefix: string, timesKey: string, kv: KeyValues, fetchImpl: Fetch = fetch): Promise<string[]> {
-  const times = ((await kv.get(timesKey)) ?? {}) as Record<string, number>;
+export async function syncKeyValues(settings: AgentSettings, feature: string, prefix: string, timesPrefix: string, kv: KeyValues, fetchImpl: Fetch = fetch): Promise<string[]> {
   const local: SyncedEntries = {};
   for (const k of await kv.keys()) {
     if (typeof k !== "string" || !k.startsWith(prefix)) continue;
     // Data saved before syncing existed has no time; 0 uploads it without overriding anything newer.
-    local[k] = { value: await kv.get(k), updatedAt: times[k] ?? 0 };
+    local[k] = { value: await kv.get(k), updatedAt: (await timeOf(kv, timesPrefix, k)) ?? 0 };
   }
-  const { entries, changed } = await syncEntries(settings, feature, local, fetchImpl);
-  const keep = changed.filter((k) => k.startsWith(prefix));
-  if (!keep.length) return [];
-  for (const k of keep) await kv.set(k, entries[k].value);
-  await kv.set(timesKey, { ...times, ...Object.fromEntries(keep.map((k) => [k, entries[k].updatedAt])) });
-  return keep;
+  const newer = await syncEntries(settings, feature, local, fetchImpl);
+  const applied: string[] = [];
+  for (const [k, entry] of Object.entries(newer)) {
+    if (!k.startsWith(prefix) || entry.deleted) continue;
+    // A save made while the sync was on the network wins over what it downloaded.
+    if (((await timeOf(kv, timesPrefix, k)) ?? -1) >= entry.updatedAt) continue;
+    await kv.set(k, entry.value);
+    await kv.set(timeKey(timesPrefix, k), entry.updatedAt);
+    applied.push(k);
+  }
+  return applied;
 }
 
-/** Notes when a key changed here and, when a server is given, uploads it. */
-export async function recordChange(kv: KeyValues, timesKey: string, key: string, value: unknown, settings: AgentSettings | undefined, feature: string, fetchImpl: Fetch = fetch) {
+/**
+ * Saves a key here, noting when it changed, and uploads it when a server is
+ * given. The time is written first, so a sync running meanwhile can't put an
+ * older download over it.
+ */
+export async function recordChange(kv: KeyValues, timesPrefix: string, key: string, value: unknown, settings: AgentSettings | undefined, feature: string, fetchImpl: Fetch = fetch) {
   const updatedAt = Date.now();
-  const times = ((await kv.get(timesKey)) ?? {}) as Record<string, number>;
-  await kv.set(timesKey, { ...times, [key]: updatedAt });
+  await kv.set(timeKey(timesPrefix, key), updatedAt);
+  await kv.set(key, value);
   if (settings) await pushEntry(settings, feature, key, { value, updatedAt }, fetchImpl).catch(() => undefined);
 }

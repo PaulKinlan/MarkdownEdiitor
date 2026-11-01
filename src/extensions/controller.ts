@@ -106,6 +106,8 @@ export class ExtensionController extends EventTarget {
       syncLibrary(server).catch((e) => (console.warn("Couldn't sync extensions", e), false)),
       this.storage.sync(server).catch((e) => (console.warn("Couldn't sync extension data", e), [] as string[])),
     ]);
+    // Running extensions may have read their storage at start-up, so restart the ones whose data arrived.
+    for (const id of new Set(data.map((k) => k.split(":")[1]))) this.host.stop(id);
     if (library || data.length) await this.load(this.site);
   }
 

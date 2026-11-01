@@ -49,6 +49,20 @@ export class FeatureStore extends DurableObject<Env> {
     return { key, value, updatedAt };
   }
 
+  /**
+   * Stores `value` unless the stored one has an `updatedAt` at least as new,
+   * so uploads that arrive out of order can't replace a newer change.
+   * Returns the entry that is stored afterwards and whether it was this one.
+   */
+  putIfNewer(key: string, value: unknown): FeatureEntry & { stored: boolean } {
+    const at = (v: unknown) => (v && typeof v === "object" && typeof (v as { updatedAt?: unknown }).updatedAt === "number" ? (v as { updatedAt: number }).updatedAt : undefined);
+    const current = this.get(key);
+    const mine = at(value);
+    const theirs = current ? at(current.value) : undefined;
+    if (current && mine !== undefined && theirs !== undefined && theirs >= mine) return { ...current, stored: false };
+    return { ...this.put(key, value), stored: true };
+  }
+
   delete(key: string): boolean {
     checkKey(key);
     return this.sql.exec("DELETE FROM entries WHERE key = ?", key).rowsWritten > 0;

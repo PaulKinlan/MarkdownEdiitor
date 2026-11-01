@@ -17,8 +17,8 @@ interface KV {
 const kv: KV = { get: (k) => get(k), set: (k, v) => set(k, v), keys: () => keys() };
 const FEATURE = "extension-data";
 const PREFIX = "extension:";
-/** When each key last changed here, by key. */
-const TIMES_KEY = "md-editor:extension-data:times";
+/** When a key last changed here is kept under this prefix plus the key. */
+const TIMES_PREFIX = "md-editor:extension-data:time:";
 
 export class SyncedExtensionStorage {
   constructor(
@@ -32,12 +32,11 @@ export class SyncedExtensionStorage {
   }
 
   async set(key: string, value: unknown): Promise<void> {
-    await this.store.set(key, value);
-    await (await synced()).recordChange(this.store, TIMES_KEY, key, value, this.server(), FEATURE, this.fetchImpl);
+    await (await synced()).recordChange(this.store, TIMES_PREFIX, key, value, this.server(), FEATURE, this.fetchImpl);
   }
 
   /** Merges this browser's extension data with the server's. Returns the keys that changed here. */
   async sync(settings: AgentSettings): Promise<string[]> {
-    return (await synced()).syncKeyValues(settings, FEATURE, PREFIX, TIMES_KEY, this.store, this.fetchImpl);
+    return (await synced()).syncKeyValues(settings, FEATURE, PREFIX, TIMES_PREFIX, this.store, this.fetchImpl);
   }
 }

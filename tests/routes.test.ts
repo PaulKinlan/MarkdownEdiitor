@@ -52,5 +52,7 @@ describe("API routing", () => {
     await call("/api/features/git/site-1?prefix=last", {}, e);
     expect(calls).toEqual(['git:site-1.put(["last commit",{"sha":"1"}])', 'git:site-1.get(["last commit"])', 'git:site-1.list(["last"])']);
     expect((await call("/api/features/Bad/site-1", {}, e)).status).toBe(404);
+    await call("/api/features/snippets/global/a?ifNewer=1", { method: "PUT", body: JSON.stringify({ updatedAt: 2 }) }, e);
+    expect(calls.at(-1)).toBe('snippets:global.putIfNewer(["a",{"updatedAt":2}])');
   });
 });
