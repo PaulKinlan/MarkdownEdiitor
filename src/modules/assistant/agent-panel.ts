@@ -1,8 +1,9 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { ChatItem, Edit, FileChange, ModelInfo } from "../../shared/protocol";
-import { editDecisions, type AgentLink } from "../../lib/agent-client";
-import { BUILTIN_ACTIONS, SITE_ACTIONS, loadCustomActions, saveCustomActions, type ActionScope, type EditAction } from "../../lib/actions";
+import { editDecisions, type AgentLink, type AgentSettings } from "../../lib/agent-client";
+import { BUILTIN_ACTIONS, SITE_ACTIONS, CUSTOM_ACTIONS_EVENT, loadCustomActions, type ActionScope, type EditAction } from "../../lib/actions";
+import { putCustomAction, removeCustomAction } from "../../lib/custom-actions";
 import { diffWords } from "../../lib/diff";
 import { skillPrompt, skillsFor, skillTitle, type Skill } from "../../shared/skills";
 import type { SkillManager, SkillsDialog } from "./skills-dialog";
@@ -109,6 +110,8 @@ export class AgentPanel extends LitElement {
   @property({ attribute: false }) skillManager?: SkillManager;
   /** Quick edits that editor extensions added, shown after the others. */
   @property({ attribute: false }) extensionActions: EditAction[] = [];
+  /** The agent server, when it's up, so custom edits reach other browsers. */
+  @property({ attribute: false }) server?: AgentSettings;
 
   @state() private custom: EditAction[] = loadCustomActions();
   @state() private error = "";
@@ -136,8 +139,17 @@ export class AgentPanel extends LitElement {
     }
   }
 
+  private onCustomActions = () => (this.custom = loadCustomActions());
+
+  connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener(CUSTOM_ACTIONS_EVENT, this.onCustomActions);
+    this.custom = loadCustomActions();
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener(CUSTOM_ACTIONS_EVENT, this.onCustomActions);
     this.connection?.removeEventListener("change", this.onChange);
     this.connection?.removeEventListener("error", this.onError);
   }
@@ -241,17 +253,13 @@ export class AgentPanel extends LitElement {
     if (!name || !prompt) return;
     const scope = form.get("scope") === "site" ? "site" : "post";
     const id = this.editing?.id || `custom-${crypto.randomUUID()}`;
-    const custom = [...loadCustomActions().filter((a) => a.id !== id), { id, name, prompt, scope } satisfies EditAction];
-    saveCustomActions(custom);
-    this.custom = custom;
+    this.custom = putCustomAction({ id, name, prompt, scope }, this.server);
     this.editing = undefined;
     (e.target as HTMLFormElement).reset();
   }
 
   private deleteAction(action: EditAction) {
-    const custom = loadCustomActions().filter((a) => a.id !== action.id);
-    saveCustomActions(custom);
-    this.custom = custom;
+    this.custom = removeCustomAction(action.id, this.server);
   }
 
   private renderDecision(s: Suggestion) {

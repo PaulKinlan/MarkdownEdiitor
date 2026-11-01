@@ -142,5 +142,12 @@ export async function listShortcodes(root: FileSystemDirectoryHandle, config: Hu
   return [...names].sort();
 }
 
+/** Whether a changed path could add, remove or change a shortcode (layouts/shortcodes, a theme's, or a folder above them). */
+export function isShortcodePath(path: string): boolean {
+  const p = path.replace(/^\/+|\/+$/g, "");
+  if (!p || p === "layouts" || p === "themes") return true;
+  return /^(themes\/[^/]+\/)?layouts\/_?shortcodes(\/|$)/.test(p) || /^themes\/[^/]+(\/layouts)?$/.test(p);
+}
+
 export const CONTENT_EXTENSIONS = [".md", ".markdown"];
 export const isContentFile = (name: string) => CONTENT_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext));
