@@ -5,6 +5,7 @@
 import { get as idbGet, set as idbSet } from "idb-keyval";
 import type { AgentLink, AgentSettings } from "../lib/agent-client";
 import { ExtensionHost, type HostBridge } from "./host";
+import { SyncedExtensionStorage } from "./storage";
 import { approve, install, listExtensions, setEnabled, syncLibrary, uninstall, type LibraryEntry } from "./library";
 import { parseExtension } from "./loader";
 import { PERMISSIONS, type PostSnapshot, type SettingValues, type SiteEntry, type SitePost } from "./types";
@@ -34,6 +35,7 @@ const SELECTION_DELAY_MS = 150;
 
 export class ExtensionController extends EventTarget {
   readonly host: ExtensionHost;
+  private readonly storage: SyncedExtensionStorage;
   entries: LibraryEntry[] = [];
   private site?: { id: string; name: string; handle: FileSystemDirectoryHandle };
   private changeTimer?: ReturnType<typeof setTimeout>;
@@ -71,7 +73,8 @@ export class ExtensionController extends EventTarget {
         install: (source) => this.installSource(source, "assistant"),
       },
     };
-    this.host = new ExtensionHost(bridge);
+    this.storage = new SyncedExtensionStorage(() => this.app.server());
+    this.host = new ExtensionHost(bridge, { storage: this.storage });
     this.host.addEventListener("change", () => {
       this.pushToAgent();
       this.dispatchEvent(new Event("change"));
@@ -95,15 +98,15 @@ export class ExtensionController extends EventTarget {
     this.dispatchEvent(new Event("change"));
   }
 
-  /** Merges this browser's installed extensions with the server's library. */
+  /** Merges this browser's installed extensions, and what they've stored, with the server's. */
   async sync() {
     const server = this.app.server();
     if (!server) return;
-    try {
-      if (await syncLibrary(server)) await this.load(this.site);
-    } catch (e) {
-      console.warn("Couldn't sync extensions", e);
-    }
+    const [library, data] = await Promise.all([
+      syncLibrary(server).catch((e) => (console.warn("Couldn't sync extensions", e), false)),
+      this.storage.sync(server).catch((e) => (console.warn("Couldn't sync extension data", e), [] as string[])),
+    ]);
+    if (library || data.length) await this.load(this.site);
   }
 
   // ---- Editor events --------------------------------------------------------------
