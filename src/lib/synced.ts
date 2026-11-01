@@ -101,3 +101,11 @@ export async function syncKeyValues(settings: AgentSettings, feature: string, pr
   await kv.set(timesKey, { ...times, ...Object.fromEntries(keep.map((k) => [k, entries[k].updatedAt])) });
   return keep;
 }
+
+/** Notes when a key changed here and, when a server is given, uploads it. */
+export async function recordChange(kv: KeyValues, timesKey: string, key: string, value: unknown, settings: AgentSettings | undefined, feature: string, fetchImpl: Fetch = fetch) {
+  const updatedAt = Date.now();
+  const times = ((await kv.get(timesKey)) ?? {}) as Record<string, number>;
+  await kv.set(timesKey, { ...times, [key]: updatedAt });
+  if (settings) await pushEntry(settings, feature, key, { value, updatedAt }, fetchImpl).catch(() => undefined);
+}

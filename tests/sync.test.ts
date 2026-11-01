@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { syncEntries, type SyncedEntry } from "../src/lib/synced";
 import { SyncedExtensionStorage } from "../src/extensions/storage";
-import { HUGO_SHORTCODES, isShortcodePath, shortcodeSnippet } from "../src/lib/hugo";
+import { isShortcodePath } from "../src/lib/hugo";
+import { HUGO_SHORTCODES, shortcodeSnippet } from "../src/lib/hugo-shortcodes";
 
 const settings = { server: "https://editor.test", token: "t" };
 

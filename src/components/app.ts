@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
-import { readHugoConfig, listShortcodes, isContentFile, isShortcodePath, shortcodeSnippet, HUGO_SHORTCODES, type HugoConfig } from "../lib/hugo";
+import { readHugoConfig, listShortcodes, isContentFile, isShortcodePath, type HugoConfig } from "../lib/hugo";
 import { getDir, getFile, writeFile, exists, readText } from "../lib/fs";
 import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise, sortPosts, samePosts, type PostSummary } from "../lib/posts";
 import { postCard } from "../lib/post-card";
@@ -184,6 +184,8 @@ export class MdApp extends LitElement {
   @state() private needsPermission = false;
   @state() private config?: HugoConfig;
   @state() private shortcodes: string[] = [];
+  /** Hugo's own shortcodes, loaded once a site is open. */
+  @state() private hugoShortcodes?: typeof import("../lib/hugo-shortcodes");
   @state() private posts: PostSummary[] = [];
   /** Research notes and ideas under notes/ (see shared/notes.ts). */
   @state() private notes: PostSummary[] = [];
@@ -561,6 +563,7 @@ export class MdApp extends LitElement {
       this.posts = posts;
       this.notes = notes;
       this.shortcodes = shortcodes;
+      void import("../lib/hugo-shortcodes").then((m) => (this.hugoShortcodes = m));
       void this.watch(site);
       void this.extensions.load({ id: site.id, name: site.name, handle: site.handle });
     } catch (e) {
@@ -819,7 +822,7 @@ export class MdApp extends LitElement {
 
   private insertShortcode(e: Event) {
     const select = e.target as HTMLSelectElement;
-    if (select.value) this.editor?.insert(shortcodeSnippet(select.value, this.shortcodes));
+    if (select.value) this.editor?.insert(this.hugoShortcodes?.shortcodeSnippet(select.value, this.shortcodes) ?? `{{< ${select.value} >}}`);
     select.value = "";
   }
 
@@ -1205,7 +1208,7 @@ export class MdApp extends LitElement {
           <option value="">Insert shortcode…</option>
           ${this.shortcodes.length ? html`<optgroup label="This site">${this.shortcodes.map((s) => html`<option value=${s}>${s}</option>`)}</optgroup>` : nothing}
           <optgroup label="Built into Hugo">
-            ${HUGO_SHORTCODES.filter((s) => !this.shortcodes.includes(s.name)).map((s) => html`<option value=${s.name}>${s.name}</option>`)}
+            ${(this.hugoShortcodes?.HUGO_SHORTCODES ?? []).filter((s) => !this.shortcodes.includes(s.name)).map((s) => html`<option value=${s.name}>${s.name}</option>`)}
           </optgroup>
         </select>
         ${this.renderExtensionTools()}
