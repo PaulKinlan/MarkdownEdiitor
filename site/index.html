@@ -61,12 +61,12 @@
           </div>
           <div>
             <h3>Assistants for a post or the whole site</h3>
-            <p>Conversations run in <a href="https://earendil.com/posts/pi-durable/">Pi Durable</a> agents inside Cloudflare Durable Objects, so they survive reloads and deploys. Pick Claude, DeepSeek, OpenAI, Gemini, OpenRouter or Chrome's on-device model.</p>
+            <p>Conversations run in <a href="https://earendil.com/posts/pi-durable/">Pi Durable</a> agents inside Cloudflare Durable Objects, so they survive reloads and deploys. Pick Claude, DeepSeek, OpenAI, Gemini or OpenRouter, or Chrome's on-device model, which runs in the tab and keeps its conversation only until the tab closes.</p>
             <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">The assistant</a>
           </div>
           <div>
             <h3>Suggestions, not rewrites</h3>
-            <p>The model changes a post only by proposing find and replace edits, each shown as a word diff to accept or reject. Accepted edits go through the editor, so undo works, and nothing is written until you save.</p>
+            <p>The model changes a post only by proposing find and replace edits, each shown as a word diff to accept or reject. Accepted edits to the open post's text go through the editor, so undo works, and nothing is written until you save. The site assistant can also change other files; those are written when you accept them.</p>
             <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">Edits and review</a>
           </div>
           <div>
@@ -107,7 +107,7 @@
     <section id="how">
       <div class="wrap">
         <h2>How it works</h2>
-        <p class="intro">The page is static and talks to a Cloudflare Worker for everything that needs a server. Your posts never leave your disk unless an assistant reads them.</p>
+        <p class="intro">The page is static and talks to a Cloudflare Worker for everything that needs a server. Your posts live on your disk. When an agent server is set up, the editor syncs the site's posts and notes, drafts included, to that site's search index on the server, so the assistants can search them.</p>
         <div class="features">
           <div>
             <h3>In the browser</h3>
@@ -128,10 +128,11 @@
     <section id="run">
       <div class="wrap">
         <h2>Run it yourself</h2>
-        <p class="intro">You need Node and, for the assistant, at least one model key. Without one, <code>DEMO_MODEL=1</code> gives a scripted model so the whole loop works offline.</p>
+        <p class="intro">You need Node and, for the assistant, at least one model key. Copy <code>.dev.vars.example</code> to <code>.dev.vars</code> and add a key there, or set <code>DEMO_MODEL=1</code> in it for a scripted model that runs the whole loop without keys.</p>
 <pre><code>git clone https://github.com/PaulKinlan/MarkdownEdiitor
 cd MarkdownEdiitor
 npm install
+cp .dev.vars.example .dev.vars   # add a model key, or DEMO_MODEL=1
 npm run dev          # the editor at http://localhost:5173
 npm run dev:worker   # the Worker and Durable Objects at :8787
 
