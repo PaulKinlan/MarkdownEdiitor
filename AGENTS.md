@@ -27,6 +27,7 @@ CI runs the same checks on every push.
 - **Secrets** go in Worker secrets or `.dev.vars`, never in client code.
 - **Performance budget:** if a change shrinks the build, lower `perf-budget.json` in the same PR; raising it needs an ADR.
 - **Copy:** plain, direct, and don't anthropomorphise the models.
+- **Project page:** `site/index.html` is the GitHub Pages landing page. It summarises features and links to `docs/` rather than copying it; when a feature is added, renamed or removed, update its card and links there too.
 
 ## Testing in a browser
 

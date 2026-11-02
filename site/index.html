@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hugo Editor</title>
+  <meta name="description" content="A browser-based markdown editor for Hugo blogs, with live preview from your own hugo server and AI assistants built on Pi Durable agents in Cloudflare Durable Objects.">
+  <meta name="color-scheme" content="light dark">
+  <meta property="og:title" content="Hugo Editor">
+  <meta property="og:description" content="A markdown editor for Hugo blogs that edits your local site folder, previews with your theme, and has configurable AI assistants.">
+  <meta property="og:image" content="https://paulkinlan.github.io/MarkdownEdiitor/images/assistant.png">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="icon.svg" alt="" width="22" height="22">Hugo Editor</a>
+      <nav aria-label="Page">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/PaulKinlan/MarkdownEdiitor">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div class="wrap">
+        <h1>A writing tool for Hugo blogs, with assistants that suggest and never overwrite.</h1>
+        <p class="lede">Hugo Editor runs in the browser and edits your site folder on disk. It previews posts with your real theme from your own <code>hugo server</code>, and its assistants research, fact check and propose edits you accept or reject. It was built for <a href="https://aifoc.us">aifoc.us</a> and <a href="https://paul.kinlan.me">paul.kinlan.me</a>, and works with any Hugo site.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/PaulKinlan/MarkdownEdiitor#running-it">Run it yourself</a>
+          <a class="button" href="https://github.com/PaulKinlan/MarkdownEdiitor/tree/main/docs">Read the docs</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <figure>
+        <div class="shot"><img src="images/assistant.png" width="1400" height="900" alt="The editor with a post list on the left, the front matter form and post text in the middle, and the Assistant tab on the right showing quick edits and skills such as Fact check, Link my posts and Build a demo."></div>
+        <figcaption>Posts, the front matter form and the text, with the assistant's edits and skills beside them.</figcaption>
+      </figure>
+    </div>
+
+    <section id="features">
+      <div class="wrap">
+        <h2>What it does</h2>
+        <p class="intro">Everything around the text stays quiet so the post is the loudest thing on screen. The features below each have a page in the docs.</p>
+        <div class="features">
+          <div>
+            <h3>Your folder, your files</h3>
+            <p>Open a Hugo site folder once and the editor remembers it. It reads your Hugo config, permalinks and shortcodes. Front matter edits change only the key you touched, so saving an unchanged post is byte-identical.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/editor.md">The editor</a>
+          </div>
+          <div>
+            <h3>Live preview with your theme</h3>
+            <p>The preview pane shows the post as your local <code>hugo server</code> renders it, and Hugo's live reload refreshes it on every save.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/editor.md#running-the-preview">Running the preview</a>
+          </div>
+          <div>
+            <h3>Assistants for a post or the whole site</h3>
+            <p>Conversations run in <a href="https://earendil.com/posts/pi-durable/">Pi Durable</a> agents inside Cloudflare Durable Objects, so they survive reloads and deploys. Pick Claude, DeepSeek, OpenAI, Gemini, OpenRouter or Chrome's on-device model.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">The assistant</a>
+          </div>
+          <div>
+            <h3>Suggestions, not rewrites</h3>
+            <p>The model changes a post only by proposing find and replace edits, each shown as a word diff to accept or reject. Accepted edits go through the editor, so undo works, and nothing is written until you save.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">Edits and review</a>
+          </div>
+          <div>
+            <h3>Skills and your own edits</h3>
+            <p>Fact check, Link my posts, Build a demo, SEO and social, Editor's critique and more. Add your own as a <code>SKILL.md</code> in the site folder, install them from GitHub, or save an instruction as a one-click edit.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">Skills</a>
+          </div>
+          <div>
+            <h3>Tools that know your writing</h3>
+            <p>Full-text search over every past post, web search and fetch, MCP servers and plain HTTP APIs. Other agents, such as Claude Code, can read your site through the editor's own MCP server.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md#for-other-agents-mcp">Tools and MCP</a>
+          </div>
+          <div>
+            <h3>Extensions</h3>
+            <p>Pi-style extensions run in their own Web Worker and can add commands, toolbar buttons, status items, underlines, panels, save hooks and agent tools. The assistant can write one for you, and you approve each install.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/extensions.md">Extensions</a>
+          </div>
+          <div>
+            <h3>Built on the platform</h3>
+            <p>An installable, offline PWA. Where Chrome has them it uses the Prompt and Summarizer APIs, folder watching, WebMCP, self-sizing demo iframes, view transitions and hover cards, with fallbacks elsewhere.</p>
+            <a class="more" href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/chrome.md">Chrome features</a>
+          </div>
+        </div>
+
+        <div class="pair">
+          <figure>
+            <div class="shot"><img src="images/dark.png" width="1440" height="900" loading="lazy" alt="The editor in dark mode with the Site settings dialog open, showing the preview server address, appearance and agent server settings."></div>
+            <figcaption>Light and dark themes, and per-site settings for the preview server and agent server.</figcaption>
+          </figure>
+          <figure>
+            <div class="shot"><img src="images/phone.png" width="1272" height="675" loading="lazy" alt="Four phone screens side by side: the post list, the writing view, the assistant and the preview, switched with a bottom bar."></div>
+            <figcaption>On a phone, one pane at a time: Posts, Write, Preview and Assistant.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <h2>How it works</h2>
+        <p class="intro">The page is static and talks to a Cloudflare Worker for everything that needs a server. Your posts never leave your disk unless an assistant reads them.</p>
+        <div class="features">
+          <div>
+            <h3>In the browser</h3>
+            <p>Lit and CodeMirror 6. Site folders are opened with the File System Access API and their directory handles are kept in IndexedDB. Chrome and Edge can open real folders; other browsers get a sample site in the private file system.</p>
+          </div>
+          <div>
+            <h3>On Cloudflare</h3>
+            <p>A Worker serves the app and the API. Durable Objects hold one conversation per post and per site, the search index for each site, your tool settings and installed extensions.</p>
+          </div>
+          <div>
+            <h3>Made to grow</h3>
+            <p>A feature is a file or a folder: a skill, a quick edit, an extension, a page module, an API route or an agent backend. ACP harnesses and git publishing are next, through a small local helper.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="run">
+      <div class="wrap">
+        <h2>Run it yourself</h2>
+        <p class="intro">You need Node and, for the assistant, at least one model key. Without one, <code>DEMO_MODEL=1</code> gives a scripted model so the whole loop works offline.</p>
+<pre><code>git clone https://github.com/PaulKinlan/MarkdownEdiitor
+cd MarkdownEdiitor
+npm install
+npm run dev          # the editor at http://localhost:5173
+npm run dev:worker   # the Worker and Durable Objects at :8787
+
+# in your Hugo site folder, for the preview
+hugo server -D --port 1313</code></pre>
+        <p>To deploy your own copy, add <code>CLOUDFLARE_API_TOKEN</code> and <code>CLOUDFLARE_ACCOUNT_ID</code> as repository secrets and push to <code>main</code>. Set <code>EDITOR_TOKEN</code> before adding model keys. <a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/deploys.md">Deploys and branch previews</a> has the details.</p>
+      </div>
+    </section>
+
+    <section id="docs">
+      <div class="wrap">
+        <h2>Docs</h2>
+        <p class="intro">The documentation lives with the code in <a href="https://github.com/PaulKinlan/MarkdownEdiitor/tree/main/docs"><code>docs/</code></a>, so it changes in the same pull requests as the features.</p>
+        <ul class="docs">
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/editor.md">The editor</a><span>Folders, front matter, images, saves, preview</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/assistant.md">The assistant</a><span>Models, skills, tools, backends, MCP</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/extensions.md">Extension API</a><span>Writing your own extensions and hooks</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/modules.md">Modules</a><span>Adding a feature that runs in the page</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/chrome.md">Chrome features</a><span>On-device model, WebMCP and more</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/pwa.md">Installing it as an app</a><span>Offline, updates, file handling</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/security.md">Security and telemetry</a><span>CSP, Permissions-Policy, reports</span></li>
+          <li><a href="https://github.com/PaulKinlan/MarkdownEdiitor/blob/main/docs/features/deploys.md">Deploys</a><span>Cloudflare, branch previews</span></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      Made by <a href="https://paul.kinlan.me">Paul Kinlan</a>. Source on <a href="https://github.com/PaulKinlan/MarkdownEdiitor">GitHub</a>.
+    </div>
+  </footer>
+</body>
+</html>
