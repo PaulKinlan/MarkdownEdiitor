@@ -26,18 +26,52 @@ function unionMembers(file, name) {
   return [...body.matchAll(/^\s*\|\s*"([^"]+)"/gm)].map((m) => m[1]);
 }
 
-/** Top-level member names of an interface (two-space indented, as the formatter writes them). */
-function interfaceMembers(file, name) {
-  const lines = read(file).split("\n");
-  const start = lines.findIndex((l) => new RegExp(`interface ${name}\\b[^{]*\\{\\s*$`).test(l));
-  if (start === -1) throw new Error(`${file}: no interface ${name}`);
+/** Top-level member names of an interface (indented two more than its declaration, as the formatter writes them). */
+function membersIn(text, name) {
+  const lines = text.split("\n");
   const members = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^}/.test(line)) break;
-    const m = line.match(/^  (?:readonly )?(?:"([^"]+)"|([\w$]+))\??\s*[:(<]/);
-    if (m) members.push(m[1] ?? m[2]);
-  }
+  lines.forEach((line, i) => {
+    const decl = line.match(new RegExp(`^(\\s*)(?:export )?interface ${name}\\b[^{]*\\{\\s*$`));
+    if (!decl) return;
+    const indent = decl[1];
+    const member = new RegExp(`^${indent}  (?:readonly )?(?:"([^"]+)"|([\\w$]+))\\??\\s*[:(<]`);
+    for (const next of lines.slice(i + 1)) {
+      if (new RegExp(`^${indent}}`).test(next)) break;
+      const m = next.match(member);
+      if (m) members.push(m[1] ?? m[2]);
+    }
+  });
   return members;
+}
+
+function interfaceMembers(file, name) {
+  const members = membersIn(read(file), name);
+  if (!members.length) throw new Error(`${file}: no interface ${name}`);
+  return members;
+}
+
+/** TypeScript files under the folders, without tests or generated files. */
+function sourceFiles(...dirs) {
+  const walk = (dir) =>
+    readdirSync(join(root, dir), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(dir, e.name)) : /\.ts$/.test(e.name) && !/\.(test|gen|d)\.ts$/.test(e.name) ? [join(dir, e.name)] : [],
+    );
+  return dirs.flatMap(walk);
+}
+
+/**
+ * An interface that features extend by declaration merging: its own members,
+ * plus those every `declare module` block in src/ and worker/ adds.
+ */
+function mergedMembers(file, name) {
+  const own = interfaceMembers(file, name);
+  const added = sourceFiles("src", "worker")
+    .filter((f) => f !== file)
+    .flatMap((f) => {
+      const text = read(f);
+      return text.includes("declare module") ? membersIn(text, name) : [];
+    });
+  return [...new Set([...own, ...added])];
 }
 
 /** The `editor` object an extension gets, as paths: "on", "document.read", "ui.status", ... */
@@ -147,7 +181,7 @@ documented("docs/hooks.md", "core message type", [...interfaceMembers("src/share
 // Modules: what a first-party module sees and adds.
 documented("docs/modules.md", "Shell member", interfaceMembers("src/core/modules.ts", "Shell"));
 documented("docs/modules.md", "ModuleContext member", interfaceMembers("src/core/modules.ts", "ModuleContext"));
-documented("docs/modules.md", "service", interfaceMembers("src/core/modules.ts", "Services"));
+documented("docs/modules.md", "service", mergedMembers("src/core/modules.ts", "Services"));
 documented("docs/modules.md", "module", foldersIn("src/modules"));
 
 // The agent server and backends.
@@ -156,8 +190,8 @@ documented("docs/agents.md", "backend", filesIn("src/modules/assistant/backends"
 documented("docs/agents.md", "Profile member", interfaceMembers("worker/agent/conversation.ts", "Profile"));
 documented("docs/agents.md", "profile", filesIn("worker/agent/profiles", ".ts").map((n) => `profiles/${n}.ts`));
 documented("docs/agents.md", "built-in tool", builtinTools());
-documented("docs/agents.md", "editor → session message", interfaceMembers("src/shared/protocol.ts", "ClientMessages"));
-documented("docs/agents.md", "session → editor message", interfaceMembers("src/shared/protocol.ts", "ServerMessages"));
+documented("docs/agents.md", "editor → session message", mergedMembers("src/shared/protocol.ts", "ClientMessages"));
+documented("docs/agents.md", "session → editor message", mergedMembers("src/shared/protocol.ts", "ServerMessages"));
 documented("docs/agents.md", "AgentLink member", interfaceMembers("src/lib/agent-client.ts", "AgentLink"));
 
 // The Worker.

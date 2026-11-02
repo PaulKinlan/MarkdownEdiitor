@@ -64,6 +64,7 @@ editor.agent.onToolResult(({ tool, result }) => {
 - Needs `agent:hooks`. They see every tool call from both assistants (post and site), the built-in tools as well as other extensions' tools.
 - `onToolCall` returns `{ block: "reason" }` (the model gets the reason as an error result), `{ args: {...} }` to run the call with other arguments, or nothing.
 - `onToolResult` gets `result` as `{ text, isError }` and returns a new `{ text, isError? }` (or a string), or nothing to keep it.
+- **Except the model's own web tools.** With native web tools on (the default, under Settings → Assistant → Tools and MCP servers), Claude and OpenAI models search and fetch on the provider's side within one request, so those searches never reach these hooks. To block or rewrite web searches and fetches, turn native web tools off; the editor's `web_search` and `fetch_url` then run as ordinary tool calls.
 - The hook runs in the editor, so the agent server asks the open editor over the WebSocket. The page gives a hook 4 seconds and the server 5. When the editor is closed, slow or throws, the call goes ahead unchanged.
 
 ### How a call reaches an extension
@@ -118,7 +119,7 @@ A Pi Durable extension hooks in with:
 
 - **`section(name, () => text)`**: a part of the system prompt, rebuilt each turn. Keep the text stable when nothing changed, so prompt caches stay warm (the skills catalog only changes when the set of skills does).
 - **`hook(ToolTask, { beforeTool, afterTool })`**: around every tool call in the conversation. `beforeTool` returns `{ block }` or `{ arguments }`; `afterTool` returns a changed result. This is how editor extensions' tool hooks are carried out.
-- **Native web tools**: `addNativeWebTools` wraps each provider so the request payload swaps `web_search` and `fetch_url` for the provider's own server-side tools when the model has them (`worker/tools/native.ts`).
+- **Native web tools**: `addNativeWebTools` wraps each provider so the request payload swaps `web_search` and `fetch_url` for the provider's own server-side tools when the model has them (`worker/tools/native.ts`). Those run on the provider's side, so no `ToolTask` hook sees them.
 
 ### New message types
 

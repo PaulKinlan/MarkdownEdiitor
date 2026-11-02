@@ -167,7 +167,7 @@ Needs `microphone`. One extension listens at a time; starting takes the micropho
 
 Needs `extensions`, which only built-in extensions (the Extension builder) can have.
 
-- `await editor.extensions.list()`: the extensions the editor has, with their manifests.
+- `await editor.extensions.list()`: the extensions the editor has, each as `{ id, name, description, origin, from?, enabled, permissions, waitingForApproval?, status, error?, logs }` (`origin` is `builtin`, `site` or `installed`; `logs` holds its recent errors). Use `read(id)` for an extension's source.
 - `await editor.extensions.read(id)`: an extension's source, or `null`.
 - `await editor.extensions.install(source)`: installs or updates an extension from its source once the author approves it, and resolves with how loading went.
 
