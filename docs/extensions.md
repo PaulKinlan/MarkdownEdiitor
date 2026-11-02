@@ -39,6 +39,7 @@ Rules:
 - Everything on `editor` that talks to the editor returns a Promise, except the `register*` calls, `editor.on`, `ui.status`, `ui.toolbarButton` and `ui.panel`, which return at once.
 - An error thrown at start marks the extension as failed (shown in Settings → Extensions). Errors in event handlers are logged there too; the extension keeps running.
 - Keep it self-contained: helpers go in the same file.
+- Built-in extensions can set `enabledByDefault: false` in the manifest to stay off until the author turns them on.
 
 ## Permissions
 
@@ -54,6 +55,7 @@ Rules:
 | `network` | `fetch`, `WebSocket`, `EventSource` in the worker (https, wss, and localhost) |
 | `notifications` | `ui.alert`: system notifications while the editor is in the background |
 | `microphone` | `editor.speech`: dictation with the browser's speech recognition |
+| `extensions` | `editor.extensions`: list, read and install extensions. Built-in extensions only |
 
 Ask for the fewest permissions that do the job. A call without its permission rejects with an error naming the missing permission.
 
@@ -160,6 +162,14 @@ Needs `microphone`. One extension listens at a time; starting takes the micropho
 
 - `await editor.speech.start({ lang? })`: starts dictation (`lang` defaults to the browser's language). Rejects where the browser has no speech recognition. Results arrive as `speech:result` events; `speech:end` follows when it stops.
 - `await editor.speech.stop()`.
+
+## editor.extensions
+
+Needs `extensions`, which only built-in extensions (the Extension builder) can have.
+
+- `await editor.extensions.list()`: the extensions the editor has, with their manifests.
+- `await editor.extensions.read(id)`: an extension's source, or `null`.
+- `await editor.extensions.install(source)`: installs or updates an extension from its source once the author approves it, and resolves with how loading went.
 
 ## editor.storage
 

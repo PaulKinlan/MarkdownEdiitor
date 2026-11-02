@@ -5,13 +5,14 @@ Instructions for coding agents (and people) changing the Hugo Editor.
 ## Read first
 
 - `README.md`: what the editor does and how to run it; `docs/features/` for each feature.
+- `docs/README.md`: how the editor is built and where to add things: the extension API (`docs/extensions.md`), hooks (`docs/hooks.md`), modules, the agent server and the Worker.
 - `docs/adr/`: decisions, including what was deliberately not done.
 - `DESIGN.md` before touching UI; `THREAT_MODEL.md` before touching headers, auth, `/api` routes or manifest OS surfaces.
 
 ## Before you push
 
 ```sh
-npm run gate   # typecheck, unit tests, build, discovery files, performance budget
+npm run gate   # typecheck, unit tests, build, discovery files, performance budget, docs
 ```
 
 CI runs the same checks on every push.
@@ -26,6 +27,7 @@ CI runs the same checks on every push.
 - **Styles:** use the tokens in `src/styles.css`. No inline `style="…"` attributes and no inline scripts: the CSP will block them once it is enforced. Lit shadow roots don't get page-level rules, so shared control styles live in `src/components/shared.ts`.
 - **Secrets** go in Worker secrets or `.dev.vars`, never in client code.
 - **Performance budget:** if a change shrinks the build, lower `perf-budget.json` in the same PR; raising it needs an ADR.
+- **Docs move with the code.** A change to the extension API, a hook or event, the module shell or context, a service, a backend, a profile, a built-in tool, a protocol message, a route or a Durable Object updates the page in `docs/` that describes it, in the same PR (`docs/README.md` lists which page covers what). A new feature gets `docs/features/<name>.md`, linked from the README. `node scripts/check-docs.mjs` (in the gate and CI) fails when the code names something the docs don't; fix it by documenting the thing, not by changing the check. `docs/extensions.md` is also the assistant's reference when it writes extensions, so keep it exact.
 - **Copy:** plain, direct, and don't anthropomorphise the models.
 
 ## Testing in a browser

@@ -27,7 +27,7 @@ A feature should be a folder or a file, not an edit to a shared list:
 - an agent backend (where the model loop runs): `src/modules/assistant/backends/<id>.ts`
 - its documentation: `docs/features/<name>.md`, linked from the table above
 
-See `AGENTS.md` for the rest of the rules.
+How it all fits together, every hook and extension point, and where each of these goes is in the [developer docs](docs/README.md): [extensions](docs/extensions.md), [hooks and events](docs/hooks.md), [modules](docs/modules.md), [the agent server](docs/agents.md) and [the Worker](docs/worker.md). See `AGENTS.md` for the rest of the rules.
 
 ## Running it
 
@@ -37,7 +37,7 @@ npm run dev        # Vite dev server at http://localhost:5173 (proxies /api to :
 npm run dev:worker # the Worker and Durable Objects at http://localhost:8787
 npm test           # unit tests (front matter, permalinks, templates)
 npm run typecheck
-npm run gate       # typecheck, tests, build, discovery files and the performance budget
+npm run gate       # typecheck, tests, build, discovery files, the performance budget and the docs check
 npm run deploy     # build and deploy to Cloudflare Workers
 ```
 

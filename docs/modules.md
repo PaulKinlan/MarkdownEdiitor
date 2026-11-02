@@ -25,6 +25,19 @@ export default defineModule({
 });
 ```
 
+## The modules
+
+| Module | Folder | Adds |
+| --- | --- | --- |
+| Hugo preview | `hugo-preview` | the Preview side tab, from the site's `hugo server`, and its settings section |
+| Assistant | `assistant` | the Assistant side tab, its settings, skills and tools dialogs, the `prompt` and `agentServer` services, and the agent backends (`backends/`, see [agents.md](agents.md#backends)) |
+| Spell check | `spelling` | the spell check option, the site's dictionary and its settings section |
+| Images | `images` | dropped and pasted images, saved under `static/images/<post>/` and inserted as a figure shortcode |
+| Self-sizing demos | `demo-sizing` | a command that makes the site's inline demos size themselves (opts `static/` demo pages in and updates the iframe shortcode) |
+| Tools for browser agents | `webmcp` | WebMCP tools, where Chrome has them |
+
+Hooks a module can use are collected in [hooks.md](hooks.md#module-hooks).
+
 ## The shell
 
 `activate()` gets a context whose `shell` is the app as modules see it (`Shell` in `src/core/modules.ts`):
