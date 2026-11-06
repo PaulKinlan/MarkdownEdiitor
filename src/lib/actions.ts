@@ -4,7 +4,8 @@ import { parse } from "yaml";
 // "Edits" are saved prompts the assistant runs against the open post, or,
 // for site edits, across the whole site. The built-in ones cover common
 // passes, one file each in src/quick-edits; authors add their own in the
-// Assistant panel, and those are stored in this browser. Bigger, multi-step
+// Assistant panel, and those are stored in this browser and copied to the
+// agent server so other machines get them (see ./synced.ts). Bigger, multi-step
 // tasks (fact checking, demos, SEO) are skills: see src/skills.
 
 export type ActionScope = "post" | "site";
@@ -16,6 +17,8 @@ export interface EditAction {
   builtin?: boolean;
   /** Which assistant runs it. Missing means "post", as edits saved before site edits existed were. */
   scope?: ActionScope;
+  /** When a custom edit last changed, for syncing between browsers. */
+  updatedAt?: number;
 }
 
 /** src/quick-edits/<id>.md: YAML front matter (`name`, `scope`, `order`), then the prompt. */
@@ -38,16 +41,18 @@ export const BUILTIN_ACTIONS: EditAction[] = ALL.filter((a) => a.scope !== "site
 
 export const SITE_ACTIONS: EditAction[] = ALL.filter((a) => a.scope === "site");
 
-const KEY = "md-editor:custom-actions";
+export const KEY = "md-editor:custom-actions";
+/** Fired on window when custom edits change, here or from the server. */
+export const CUSTOM_ACTIONS_EVENT = "md-editor:custom-actions";
 
-export function loadCustomActions(): EditAction[] {
+export function readJson<T>(key: string, fallback: T): T {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    return JSON.parse(localStorage.getItem(key) ?? "") ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export function saveCustomActions(actions: EditAction[]) {
-  localStorage.setItem(KEY, JSON.stringify(actions.filter((a) => !a.builtin)));
+export function loadCustomActions(): EditAction[] {
+  return readJson<EditAction[]>(KEY, []);
 }

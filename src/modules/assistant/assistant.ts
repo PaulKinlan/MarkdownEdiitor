@@ -130,6 +130,7 @@ export class Assistant {
     this.shell.update();
     if (failed) return;
     void this.shell.extensions.sync();
+    void import("../../lib/custom-actions").then((m) => m.syncCustomActions(this.settings)).catch((e) => console.warn("Couldn't sync custom edits", e));
     this.setStatus("Indexing posts for search…");
     await this.syncIndex();
   }

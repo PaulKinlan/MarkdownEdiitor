@@ -49,6 +49,7 @@ export default defineModule({
           @model-change=${(e: CustomEvent<string>) => assistant.setModel(e.detail)}
           @apply-edit=${(e: CustomEvent<{ edit: Edit; done: (ok: boolean) => void }>) => e.detail.done(shell.applyEdit(e.detail.edit))}
           .extensionActions=${quickEdits()}
+          .server=${assistant.serverUp ? assistant.settings : undefined}
           @apply-file-change=${(e: CustomEvent<{ path: string; edit?: Edit; create?: string; done: (ok: boolean) => void }>) => {
             const { path, edit, create, done } = e.detail;
             assistant.applyFileChange(path, edit, create).then(done, (err) => {

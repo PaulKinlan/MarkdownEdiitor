@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { customElement, query, state } from "lit/decorators.js";
 import { Post } from "../lib/frontmatter";
-import { readHugoConfig, listShortcodes, isContentFile, type HugoConfig } from "../lib/hugo";
+import { readHugoConfig, listShortcodes, isContentFile, isShortcodePath, type HugoConfig } from "../lib/hugo";
 import { getDir, getFile, writeFile, exists, readText } from "../lib/fs";
 import { listNotes, listPosts, newNote, newPostFromTemplate, sections, summarise, sortPosts, samePosts, type PostSummary } from "../lib/posts";
 import { postCard } from "../lib/post-card";
@@ -184,6 +184,8 @@ export class MdApp extends LitElement {
   @state() private needsPermission = false;
   @state() private config?: HugoConfig;
   @state() private shortcodes: string[] = [];
+  /** Hugo's own shortcodes, loaded once a site is open. */
+  @state() private hugoShortcodes?: typeof import("../lib/hugo-shortcodes");
   @state() private posts: PostSummary[] = [];
   /** Research notes and ideas under notes/ (see shared/notes.ts). */
   @state() private notes: PostSummary[] = [];
@@ -380,7 +382,7 @@ export class MdApp extends LitElement {
             if (!samePosts(notes, this.notes)) this.notes = notes;
           }
         }
-        await this.checkOpenPost();
+        await Promise.all([this.checkOpenPost(), this.refreshShortcodes()]);
       } catch (e) {
         console.warn("Couldn't refresh the post list", e);
       } finally {
@@ -388,6 +390,14 @@ export class MdApp extends LitElement {
       }
     })();
     return this.catchingUp;
+  }
+
+  /** Re-reads the site's and theme's shortcode folders, e.g. after a git pull adds one. */
+  private async refreshShortcodes() {
+    const { site, config } = this;
+    if (!site || !config || this.needsPermission) return;
+    const shortcodes = await listShortcodes(site.handle, config);
+    if (site.id === this.site?.id && config === this.config && shortcodes.join() !== this.shortcodes.join()) this.shortcodes = shortcodes;
   }
 
   /** Picks up edits made outside the editor (another app, git checkout, an agent). */
@@ -446,6 +456,7 @@ export class MdApp extends LitElement {
       if (site.id !== this.site?.id) return;
       this.notes = notes;
     }
+    if (changes.rescan || [...changes.paths, ...changes.dirs].some(isShortcodePath)) await this.refreshShortcodes();
     const openPath = this.open?.summary.path;
     if (rescan || (openPath && [...changes.paths].some((p) => openPath === p || openPath.startsWith(`${p}/`)))) await this.checkOpenPost();
     this.extensions.filesChanged(changes.paths, changes.rescan);
@@ -552,6 +563,7 @@ export class MdApp extends LitElement {
       this.posts = posts;
       this.notes = notes;
       this.shortcodes = shortcodes;
+      void import("../lib/hugo-shortcodes").then((m) => (this.hugoShortcodes = m));
       void this.watch(site);
       void this.extensions.load({ id: site.id, name: site.name, handle: site.handle });
     } catch (e) {
@@ -810,7 +822,7 @@ export class MdApp extends LitElement {
 
   private insertShortcode(e: Event) {
     const select = e.target as HTMLSelectElement;
-    if (select.value) this.editor?.insert(`{{< ${select.value} >}}`);
+    if (select.value) this.editor?.insert(this.hugoShortcodes?.shortcodeSnippet(select.value, this.shortcodes) ?? `{{< ${select.value} >}}`);
     select.value = "";
   }
 
@@ -1192,12 +1204,13 @@ export class MdApp extends LitElement {
       )}
       <div class="toolbar">
         <span class="path" title=${summary.path}>${icon("file")}<span>${summary.path}</span></span>
-        ${this.shortcodes.length
-          ? html`<select aria-label="Insert shortcode" @change=${this.insertShortcode}>
-              <option value="">Insert shortcode…</option>
-              ${this.shortcodes.map((s) => html`<option value=${s}>${s}</option>`)}
-            </select>`
-          : nothing}
+        <select aria-label="Insert shortcode" @change=${this.insertShortcode}>
+          <option value="">Insert shortcode…</option>
+          ${this.shortcodes.length ? html`<optgroup label="This site">${this.shortcodes.map((s) => html`<option value=${s}>${s}</option>`)}</optgroup>` : nothing}
+          <optgroup label="Built into Hugo">
+            ${(this.hugoShortcodes?.HUGO_SHORTCODES ?? []).filter((s) => !this.shortcodes.includes(s.name)).map((s) => html`<option value=${s.name}>${s.name}</option>`)}
+          </optgroup>
+        </select>
         ${this.renderExtensionTools()}
       </div>
       <md-editor .value=${post.body} .checkSpelling=${this.contributions.editorOptions.spellcheck !== false} .annotations=${this.bodyAnnotations} @change=${this.onBodyChange} @image-files=${(e: CustomEvent<{ files: File[] }>) => void this.contributions.handleImages(e.detail.files)} @selection-change=${() => this.extensions.selectionChanged()}></md-editor>

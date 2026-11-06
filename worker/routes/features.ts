@@ -39,7 +39,12 @@ export default defineRoutes(
     method: "PUT",
     pattern: new RegExp(`${BASE}\\/(.{1,512})$`),
     decode: true,
-    handle: (c) => guarded(c, async () => Response.json(await store(c).put(c.match[3], await c.request.json()))),
+    // ?ifNewer=1 keeps the stored value when its updatedAt is at least as new.
+    handle: (c) =>
+      guarded(c, async () => {
+        const value = await c.request.json();
+        return Response.json(c.url.searchParams.has("ifNewer") ? await store(c).putIfNewer(c.match[3], value) : await store(c).put(c.match[3], value));
+      }),
   },
   {
     method: "DELETE",
