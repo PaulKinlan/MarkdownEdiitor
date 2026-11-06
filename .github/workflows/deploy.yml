@@ -54,6 +54,7 @@ jobs:
           ORIGIN_TRIAL_TOKENS: ${{ secrets.ORIGIN_TRIAL_TOKENS }}
       - run: node scripts/check-discovery.mjs
       - run: node scripts/check-perf-budget.mjs
+      - run: node scripts/check-docs.mjs
 
       - name: Work out the Worker name
         id: target
