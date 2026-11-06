@@ -2,6 +2,8 @@
 
 A markdown editor for Hugo blogs (built for [aifoc.us](https://aifoc.us) and [paul.kinlan.me](https://paul.kinlan.me)). It runs in the browser, is hosted on Cloudflare Workers, and edits the site folders on your machine directly through the File System Access API.
 
+Project page: [paulkinlan.github.io/MarkdownEdiitor](https://paulkinlan.github.io/MarkdownEdiitor/) (source in `site/`, published by `.github/workflows/pages.yml`).
+
 ## What it does
 
 | | |
